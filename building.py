@@ -1,3 +1,6 @@
+import math
+import random
+
 import pygame
 from pygame import Vector2
 
@@ -85,16 +88,17 @@ class Building(Entity):
             if self.main.debug_mode:
                 pygame.draw.rect(surface, RED, self.rect, 1)
 
-            if not self.is_complete:
-                bar_width = self.rect.width
-                bar_height = 6
-                bar_x = self.rect.left
-                bar_y = self.rect.top - 10
-                progress = self.get_build_progress()
+    def draw_overlay(self, surface):
+        if not self.is_complete:
+            bar_width = self.rect.width
+            bar_height = 6
+            bar_x = self.rect.left
+            bar_y = self.rect.top - 10
+            progress = self.get_build_progress()
 
-                pygame.draw.rect(surface, (40, 40, 40), (bar_x, bar_y, bar_width, bar_height))
-                pygame.draw.rect(surface, YELLOW, (bar_x, bar_y, int(bar_width * progress), bar_height))
-                pygame.draw.rect(surface, WHITE, (bar_x, bar_y, bar_width, bar_height), 1)
+            pygame.draw.rect(surface, (40, 40, 40), (bar_x, bar_y, bar_width, bar_height))
+            pygame.draw.rect(surface, YELLOW, (bar_x, bar_y, int(bar_width * progress), bar_height))
+            pygame.draw.rect(surface, WHITE, (bar_x, bar_y, bar_width, bar_height), 1)
 
 
 class Tower(Building):
@@ -120,9 +124,18 @@ class Depot(Building):
 
 class Lumberyard(Building):
     display_name = "Lumberyard"
-    default_scale = (40, 40)
+    default_scale = (96, 96)
     default_tint = (150, 205, 120)
     default_build_time = 4.0
+    sprite_name = "lumberyard.png"
+    worker_sprite_names = [
+        "characterBlue (1).png",
+        "characterBlue (2).png",
+        "characterBlue (3).png",
+        "characterBlue (4).png",
+        "characterBlue (5).png",
+    ]
+    worker_sprite_cache = {}
 
     def __init__(self, main, x, y, width=None, height=None, name=None, scale=None, tint=None, build_time=None):
         super().__init__(main, x, y, width, height, name, scale, tint, build_time)
@@ -131,17 +144,30 @@ class Lumberyard(Building):
         self.workers = []
         self.worker_speed = 55
         self.harvest_time = 1.1
+        self.dropoff_time = 0.6
         self.wood_stored = 0
         self.label_font = pygame.font.SysFont(None, 18)
+        self.worker_scale = (12, 16)
+
+    def get_worker_sprite(self, sprite_name):
+        if sprite_name not in self.worker_sprite_cache:
+            image = pygame.image.load(asset_path("assets", "workers", sprite_name)).convert_alpha()
+            image = pygame.transform.smoothscale(image, self.worker_scale)
+            self.worker_sprite_cache[sprite_name] = image
+        return self.worker_sprite_cache[sprite_name]
 
     def on_complete(self):
         self.workers = []
         for _ in range(self.worker_count):
+            sprite_name = random.choice(self.worker_sprite_names)
             self.workers.append({
                 "pos": Vector2(self.pos.x, self.pos.y),
                 "state": "idle",
                 "target": None,
                 "timer": 0.0,
+                "sprite_name": sprite_name,
+                "base_sprite": self.get_worker_sprite(sprite_name),
+                "angle": 0.0,
             })
 
     def find_tree_target(self):
@@ -163,12 +189,18 @@ class Lumberyard(Building):
 
         return nearby_trees[0] if nearby_trees else None
 
+    def update_worker_rotation(self, worker, direction):
+        if direction.length_squared() > 0:
+            worker["angle"] = -math.degrees(math.atan2(direction.x, direction.y))
+
     def move_worker_toward(self, worker, destination, dt):
         direction = destination - worker["pos"]
         distance = direction.length()
         if distance <= 1:
             worker["pos"] = destination.copy()
             return True
+
+        self.update_worker_rotation(worker, direction)
 
         step = self.worker_speed * dt
         if step >= distance:
@@ -183,8 +215,6 @@ class Lumberyard(Building):
 
         if not self.is_complete or not self.workers:
             return
-
-        world = self.main.game.world
 
         for worker in self.workers:
             state = worker["state"]
@@ -224,22 +254,34 @@ class Lumberyard(Building):
             if state == "returning":
                 reached = self.move_worker_toward(worker, self.pos, dt)
                 if reached:
+                    worker["state"] = "dropping_off"
+                    worker["timer"] = self.dropoff_time
+                continue
+
+            if state == "dropping_off":
+                worker["timer"] -= dt
+                if worker["timer"] <= 0:
                     self.wood_stored += 1
                     worker["target"] = None
                     worker["state"] = "idle"
 
     def draw(self, surface):
-        super().draw(surface)
-
         if self.is_complete:
             radius = int(self.harvest_radius)
             center = (int(self.pos.x), int(self.pos.y))
             pygame.draw.circle(surface, (80, 120, 60), center, radius, 1)
 
             for worker in self.workers:
-                pos = (int(worker["pos"].x), int(worker["pos"].y))
-                pygame.draw.circle(surface, (235, 210, 120), pos, 4)
+                worker_image = pygame.transform.rotate(worker["base_sprite"], worker["angle"])
+                worker_rect = worker_image.get_rect(midbottom=(int(worker["pos"].x), int(worker["pos"].y)))
+                surface.blit(worker_image, worker_rect)
 
+        super().draw(surface)
+
+    def draw_overlay(self, surface):
+        super().draw_overlay(surface)
+
+        if self.is_complete:
             wood_text = self.label_font.render(f"Wood: {self.wood_stored}", True, WHITE)
             text_rect = wood_text.get_rect(midbottom=(self.rect.centerx, self.rect.top - 12))
             surface.blit(wood_text, text_rect)

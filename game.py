@@ -204,6 +204,9 @@ class Game:
         if self.build_menu_open:
             self.draw_build_menu(surface)
 
+        for building in self.buildings:
+            building.draw_overlay(surface)
+
     def draw_build_menu(self, surface):
         menu_rect, option_rects = self.get_build_menu_rects()
 
