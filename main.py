@@ -1,4 +1,4 @@
-import pygame.sprite
+import pygame
 
 from settings import *
 from scene import Scene
@@ -15,16 +15,9 @@ class Main:
         self.display_surface = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Outpost Warfare")
         self.clock = pygame.time.Clock()
-
-        self.particle_group = pygame.sprite.LayeredUpdates()
-
-        # Create scenes once
-        self.game_scene = Game(self)
-
         self.debug_mode = False
 
-        # Set starting scene
-        self.current_scene = self.game_scene
+        self.game = Game(self)
 
     async def run(self):
         running = True
@@ -42,14 +35,12 @@ class Main:
                         self.debug_mode = not self.debug_mode
 
 
-                self.current_scene.handle_event(event)
+                self.game.handle_event(event)
 
-            self.current_scene.update(dt)
-            self.current_scene.draw(self.display_surface)
+            self.game.update(dt)
+            self.game.draw(self.display_surface)
 
-            for particle in self.particle_group:
-                particle.update(dt)
-                particle.draw(self.display_surface)
+
 
 
             pygame.display.update()

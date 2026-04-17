@@ -1,119 +1,93 @@
 import random
-
 import pygame
+from particle_animation import ParticleAnimation
 from player import Player
-
+from building import Building
 from settings import *
-from scene import Scene
-from world import World
-from camera import Camera
 
 
-class Game(Scene):
+class Game:
     def __init__(self, main):
-        super().__init__(main)
         self.font = pygame.font.SysFont(None, 60)
-
-        self.world = World(main)
-        self.player = Player(main, SCREEN_WIDTH // 2,SCREEN_HEIGHT // 2,4,4)
-        self.particle_group = pygame.sprite.LayeredUpdates()
-        self.camera = Camera(
-            screen_width=SCREEN_WIDTH,
-            screen_height=SCREEN_HEIGHT,
-            world_width=MAP_WIDTH,
-            world_height=MAP_HEIGHT,
-            zoom=2
-        )
-        self.minimap_width = 240
-        self.minimap_height = 160
-        self.minimap_margin = 20
-
-
+        self.player = Player(main, 100,100,16,16)
+        self.building = Building(main, 100,100,16,16)
+        self.buildings = set()
+        self.main = main
+        self.buildrange = 200
+        self.buildmode = False
+        self.can_place = False
+        self.placeable_object = None
 
     def handle_event(self, event):
-        if event.type == pygame.MOUSEWHEEL:
-            keys = pygame.key.get_pressed()
-            ctrl_held = keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]
+        self.player.handle_event(event)
 
-            if ctrl_held:
-                zoom_step = 0.1
-                self.camera.change_zoom(event.y * zoom_step)
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_b:
+                self.buildmode = not self.buildmode
+                if self.placeable_object != None:
+                    self.placeable_object = None
+                else:
+                    self.placeable_object = self.building
+        elif event.type == pygame.KEYUP:
+            pass
+
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            pass
+
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if self.buildmode and self.can_place:
+                self.buildings.add(Building(self.main, self.placeable_object.pos.x, self.placeable_object.pos.y, self.placeable_object.rect.width, self.placeable_object.rect.height))
+                self.buildmode = False
+                self.placeable_object = None
+            pass
+
+
+
         pass
 
     def update(self, dt):
+        self.player.update(dt, self.buildmode)
+        mouse_pos = pygame.mouse.get_pos()
 
-        self.player.update(dt, self.camera)
-        self.camera.update(self.player.rect.centerx, self.player.rect.centery)
+        if self.buildmode:
+            if self.player.pos.distance_to(mouse_pos) < self.buildrange:
+                self.can_place = True
+                self.placeable_object = self.building
+                self.placeable_object.pos = pygame.math.Vector2(mouse_pos[0], mouse_pos[1])
+            else:
+                self.can_place = False
+
+            if self.placeable_object != None:
+                self.placeable_object.pos = pygame.math.Vector2(mouse_pos[0], mouse_pos[1])
+                self.placeable_object.rect.center = self.placeable_object.pos
 
 
         pass
 
     def draw(self, surface):
-        surface.fill(BLACK)
+        surface.fill(DARK_GREEN)
+        for building in self.buildings:
+            building.draw(surface)
 
-        self.draw_world(surface)
-        self.draw_entities(surface)
-        self.draw_minimap(surface)
-        self.draw_ui(surface)
+        if self.buildmode:
+            self.draw_build_range(surface)
+            if self.can_place and self.placeable_object != None:
+                self.placeable_object.draw(surface)
 
-    def draw_minimap(self, surface):
-        minimap = self.world.get_scaled_minimap(self.minimap_width, self.minimap_height)
+        self.player.draw(surface)
 
-        minimap_x = SCREEN_WIDTH - self.minimap_width - self.minimap_margin
-        minimap_y = self.minimap_margin
-
-        # Background/frame
-        border_rect = pygame.Rect(
-            minimap_x - 2,
-            minimap_y - 2,
-            self.minimap_width + 4,
-            self.minimap_height + 4
-        )
-        pygame.draw.rect(surface, (30, 30, 30), border_rect)
-        pygame.draw.rect(surface, WHITE, border_rect, 2)
-
-        surface.blit(minimap, (minimap_x, minimap_y))
-
-        # Draw player marker
-        player_ratio_x = self.player.pos.x / self.world.world_width
-        player_ratio_y = self.player.pos.y / self.world.world_height
-
-        player_map_x = minimap_x + int(player_ratio_x * self.minimap_width)
-        player_map_y = minimap_y + int(player_ratio_y * self.minimap_height)
-
-        pygame.draw.circle(surface, RED, (player_map_x, player_map_y), 3)
-
-        # Draw camera view rectangle
-        visible = self.camera.visible_rect()
-
-        cam_ratio_x = visible.x / self.world.world_width
-        cam_ratio_y = visible.y / self.world.world_height
-        cam_ratio_w = visible.width / self.world.world_width
-        cam_ratio_h = visible.height / self.world.world_height
-
-        cam_rect = pygame.Rect(
-            minimap_x + int(cam_ratio_x * self.minimap_width),
-            minimap_y + int(cam_ratio_y * self.minimap_height),
-            max(1, int(cam_ratio_w * self.minimap_width)),
-            max(1, int(cam_ratio_h * self.minimap_height)),
+    def draw_build_range(self, surface):
+        range_image = pygame.Surface((self.buildrange * 2, self.buildrange * 2))
+        range_image.fill((0, 0, 0))
+        range_image.set_colorkey((0, 0, 0))
+        pygame.draw.circle(
+            range_image,
+            (220, 220, 220),
+            (self.buildrange, self.buildrange),
+            self.buildrange,
+            self.buildrange
         )
 
-        pygame.draw.rect(surface, WHITE, cam_rect, 1)
-
-
-    def draw_world(self, surface):
-        self.world.draw(surface, self.camera)
-
-    def draw_entities(self, surface):
-        self.player.draw(surface, self.camera)
-        #pygame.draw.rect(surface, (220, 80, 80), self.camera.apply_rect(self.player))
-
-    def draw_ui(self, surface):
-        text = self.font.render("Outpost Warfare", True, WHITE)
-        surface.blit(text, (20, 20))
-
-    def draw_particles(self, surface):
-        dt = self.main.clock.get_fps(FPS) / 1000
-        for particle in self.particle_group:
-            particle.update(dt)
-            particle.draw(surface)
+        range_image.set_alpha(20)
+        range_image.get_rect(center=self.player.rect.center)
+        surface.blit(range_image, range_image.get_rect(center=self.player.rect.center))

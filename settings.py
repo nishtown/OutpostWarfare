@@ -7,11 +7,8 @@ def asset_path(*parts):
     return os.path.join(BASE_DIR, *parts)
 
 
-
-MAP_WIDTH = 3072 * 2
-MAP_HEIGHT = 2048 * 2
-SCREEN_WIDTH = 1440
-SCREEN_HEIGHT = 900
+SCREEN_WIDTH = 1024
+SCREEN_HEIGHT = 1024
 
 
 FPS = 60
@@ -21,6 +18,7 @@ WHITE = (255, 255, 255)
 LIGHT_GRAY = (100, 100, 100)
 GRAY = (50, 50, 50)
 GREEN = (0, 255, 0)
+DARK_GREEN = (0, 75, 0)
 RED = (255, 0, 0)
 BLUE = (0, 0, 255)
 YELLOW = (255, 255, 0)
