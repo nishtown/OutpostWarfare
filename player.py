@@ -10,8 +10,8 @@ Player extends Entity and adds:
 * **Movement** – WASD / arrow keys, frame-rate independent via ``dt``, with
   axis-split collision so the player can slide along walls.
 * **Camera-follow position** – ``self.pos`` is the world-space centre; the
-  game loop is responsible for passing the correct ``camera_offset`` to
-  ``draw`` so the player is centred on the viewport.
+    game loop passes a ``Camera`` to ``draw`` so the player is projected into
+    either the main viewport or the minimap.
 * **Facing / rotation** – the sprite is rotated each frame to face the current
   movement direction (or the mouse cursor when stationary, once implemented).
 * **Inventory** – a simple ``dict[str, int]`` mapping resource names to
@@ -81,8 +81,15 @@ class Player(Entity):
         base_image = Entity.load_image(
             "assets", "player", "player.png",
             fallback_size=(32, 32),
-            fallback_color=(60, 180, 240),   # cyan placeholder – easy to spot
+            fallback_color=(60, 180, 240),
         )
+
+        shooting_image = Entity.load_image(
+            "assets", "player", "player_shoot.png",
+            fallback_size=(32, 32),
+            fallback_color=(60, 120, 250), 
+        )
+
 
         super().__init__(
             main,
@@ -96,6 +103,7 @@ class Player(Entity):
         # Keep the original unrotated image; self.image is a rotated copy.
         self.original_image: pygame.Surface = base_image
         self.image = self.original_image.copy()
+        self.shooting_image: pygame.Surface = shooting_image
 
         # Tight collision box (feet / body only, not the full sprite quad).
         self.collision_size = (self._COLLISION_W, self._COLLISION_H)
@@ -313,7 +321,7 @@ class Player(Entity):
     # Draw
     # =========================================================================
 
-    def draw(self, surface: pygame.Surface, camera_offset: Optional[Vector2] = None) -> None:
+    def draw(self, surface: pygame.Surface, camera=None) -> None:
         """Render the player sprite and optional overlays.
 
         Layers (bottom → top)
@@ -323,16 +331,16 @@ class Player(Entity):
         3. Debug overlays                  (if debug_mode: collision box)
         """
         # ── 1. Sprite via base class ───────────────────────────────────────
-        super().draw(surface, camera_offset)
+        super().draw(surface, camera)
 
         # ── 2. Harvest progress bar ────────────────────────────────────────
         if self.harvest_action is not None:
-            self._draw_harvest_bar(surface, camera_offset)
+            self._draw_harvest_bar(surface, camera)
 
     def _draw_harvest_bar(
         self,
         surface: pygame.Surface,
-        camera_offset: Optional[Vector2],
+        camera,
     ) -> None:
         """Draw a progress bar above the player's sprite while harvesting."""
         action = self.harvest_action
@@ -341,14 +349,25 @@ class Player(Entity):
 
         progress = max(0.0, min(1.0, action["progress"]))
 
-        # Position the bar just above the sprite bounding box.
+        # Position the bar just above the sprite bounding box. When the camera
+        # zooms out for the minimap the bar also scales down so it does not
+        # dominate the tiny preview.
         bar_w, bar_h = 40, 5
-        cx = int(self.pos.x)
-        cy = int(self.pos.y) - self.rect.height // 2 - 8
 
-        if camera_offset is not None:
-            cx -= int(camera_offset.x)
-            cy -= int(camera_offset.y)
+        if camera is not None and hasattr(camera, "world_to_screen"):
+            screen_pos = camera.world_to_screen(self.pos)
+            cx = int(screen_pos.x)
+            cy = int(screen_pos.y) - max(4, int(self.rect.height * camera.scale_y / 2)) - 6
+            bar_w = max(8, int(bar_w * camera.scale_x))
+            bar_h = max(2, int(bar_h * camera.scale_y))
+        else:
+            camera_offset = camera
+            cx = int(self.pos.x)
+            cy = int(self.pos.y) - self.rect.height // 2 - 8
+
+            if camera_offset is not None:
+                cx -= int(camera_offset.x)
+                cy -= int(camera_offset.y)
 
         bar_rect  = pygame.Rect(cx - bar_w // 2, cy, bar_w, bar_h)
         fill_rect = pygame.Rect(bar_rect.x, bar_rect.y,

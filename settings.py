@@ -44,11 +44,31 @@ SCREEN_HEIGHT = 1024   # Total window height (pixels)
 # Width of the right-hand side UI panel (minimap + build menu + resources).
 # Changing this constant automatically adjusts VIEWPORT_WIDTH.
 UI_PANEL_WIDTH = 300
+UI_PANEL_PADDING = 8
 
 # The portion of the window used for rendering the game world.
 # This is the area to the LEFT of the UI panel.
 VIEWPORT_WIDTH  = SCREEN_WIDTH - UI_PANEL_WIDTH   # 1236 px
 VIEWPORT_HEIGHT = SCREEN_HEIGHT                   # 1024 px
+
+# The overall world is larger than the main viewport so the camera has room
+# to move and the minimap can show a broader local region.
+WORLD_WIDTH = VIEWPORT_WIDTH * 3
+WORLD_HEIGHT = VIEWPORT_HEIGHT * 3
+
+# The minimap uses its own camera and its own render surface. Its surface size
+# matches the pixel area reserved for the map inside the UI panel.
+MINIMAP_SURFACE_WIDTH = UI_PANEL_WIDTH - UI_PANEL_PADDING * 2
+MINIMAP_SURFACE_HEIGHT = 190
+
+# How much wider the minimap camera's world view is compared to the main view.
+# A value above 1.0 means the minimap shows more area than the player can see
+# in the main camera.
+MINIMAP_VIEW_MULTIPLIER = 1.75
+MINIMAP_VIEW_WIDTH = int(VIEWPORT_WIDTH * MINIMAP_VIEW_MULTIPLIER)
+MINIMAP_VIEW_HEIGHT = int(
+    MINIMAP_VIEW_WIDTH * MINIMAP_SURFACE_HEIGHT / MINIMAP_SURFACE_WIDTH
+)
 
 # Legacy aliases – kept for any old code that still references MAP_WIDTH/HEIGHT.
 MAP_WIDTH  = SCREEN_WIDTH

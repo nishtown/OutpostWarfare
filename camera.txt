@@ -1,0 +1,385 @@
+CAMERA GUIDE
+============
+
+This file explains the camera system that was added to the project.
+
+
+1. What a camera is in this project
+-----------------------------------
+
+The camera does NOT move the player.
+The player always stays in world coordinates.
+
+The camera only answers this question:
+
+    "Which part of the world should be visible on this surface right now?"
+
+Then it converts world-space positions into screen-space positions.
+
+That means:
+
+- The player can be at world position (1854, 1536)
+- The main camera might currently start at world offset (1236, 1024)
+- So on the main screen the player is drawn at:
+
+      (1854 - 1236, 1536 - 1024) = (618, 512)
+
+That is the basic idea behind camera movement.
+
+
+2. The files involved
+---------------------
+
+camera.py
+- Contains the Camera class.
+
+settings.py
+- Contains the world size and the camera/minimap constants.
+
+game.py
+- Creates both camera objects.
+- Updates both cameras every frame.
+- Renders the world once for the main camera and once for the minimap camera.
+
+entity.py
+- Base entity drawing now understands cameras.
+- If an entity gets a Camera object, it draws in the correct place and scale.
+
+player.py
+- Player uses the game camera when drawing.
+- Movement now respects world bounds through Game.can_move_player_to().
+
+gameui.py
+- The minimap now shows the minimap camera's render surface.
+- It also draws a rectangle showing the main camera's visible area.
+
+
+3. The two cameras you now have
+-------------------------------
+
+There are TWO separate cameras in game.py.
+
+Main camera
+- Variable: self.camera
+- Purpose: draw the main playable view on the left side of the screen
+- Surface size: VIEWPORT_WIDTH x VIEWPORT_HEIGHT
+- View size: same as the surface, so it is a 1:1 camera right now
+
+Minimap camera
+- Variable: self.minimap_camera
+- Purpose: draw a wider local region for the minimap
+- Surface size: MINIMAP_SURFACE_WIDTH x MINIMAP_SURFACE_HEIGHT
+- View size: much larger than the surface because it uses MINIMAP_VIEW_MULTIPLIER
+
+That is why the minimap now shows more area than the main screen.
+
+
+4. Important Camera properties
+------------------------------
+
+The Camera class stores these important values:
+
+world_width / world_height
+- How large the whole world is.
+
+surface_width / surface_height
+- The pixel size of the render target this camera draws into.
+
+view_width / view_height
+- How much world-space this camera can currently see.
+- Larger view size means the camera sees MORE of the world.
+- Smaller view size means the camera sees LESS of the world.
+
+offset
+- The world-space position of the camera's top-left corner.
+- This is one of the most important values in the entire system.
+
+target
+- The object the camera follows.
+- Right now both cameras follow the player.
+
+scale_x / scale_y
+- Conversion ratio from world pixels to surface pixels.
+- Main camera is near 1.0 because it is basically a direct view.
+- Minimap camera is much smaller because it squeezes a larger world area into a small surface.
+
+view_rect
+- A pygame.Rect representing what world area this camera currently sees.
+- The UI uses the main camera's view_rect to draw the white rectangle on the minimap.
+
+
+5. Frame flow: what happens every frame
+---------------------------------------
+
+The order matters a lot.
+
+Step 1: Main.run() calls Game.update(dt)
+- The player updates its movement.
+- The main camera updates to follow the player's new position.
+- The minimap camera also updates to follow the player.
+
+Step 2: Main.run() calls Game.draw(screen)
+- The world is rendered once with the main camera into self.world_surface.
+- The world is rendered again with the minimap camera into self.minimap_surface.
+
+Step 3: self.world_surface is blitted to the main display
+- This fills the left side of the window.
+
+Step 4: GameUI.draw(...) is called
+- It draws the right-hand panel.
+- The minimap widget receives:
+  - the minimap render surface
+  - the minimap camera
+  - the main camera's view_rect
+  - the player's world position
+
+Step 5: Minimap.draw(...) overlays useful information
+- It draws the minimap image.
+- It draws the player marker.
+- It draws the main camera's current visible rectangle.
+
+
+6. Why the minimap can now show more than the main view
+-------------------------------------------------------
+
+Before this change:
+- The minimap was just reusing the exact same world surface as the main view.
+- So the minimap could never show anything outside the main viewport.
+
+Now:
+- The main view and the minimap use different cameras.
+- The minimap camera has a larger view_width/view_height.
+- That larger world-space view is rendered into its own surface.
+
+So the minimap is no longer a copy of the main screen.
+It is a second view of the same world.
+
+
+7. The most important methods to understand
+-------------------------------------------
+
+Camera.set_target(target)
+- Tells the camera what to follow.
+
+Camera.update()
+- Moves the camera so the target is near the center.
+- Also clamps the camera so it cannot move outside the world.
+
+Camera.center_on(position)
+- Manually centers the camera on a specific world position.
+- Useful if later you want to move the camera to a building, event, or cutscene point.
+
+Camera.world_to_screen(position)
+- Converts a world point into a surface point.
+
+Camera.world_rect_to_screen(rect)
+- Converts a world rectangle into a surface rectangle.
+- This is used for entities, borders, landmarks, and the viewport box on the minimap.
+
+Game._render_world(surface, camera)
+- This is the heart of the render pipeline.
+- It draws the world background, landmarks, and player from the perspective of the given camera.
+- Because it accepts a camera parameter, the same function can render the world for both the main view and the minimap.
+
+Entity.draw(surface, camera)
+- If you pass a Camera object, the entity draws in the correct place and scale.
+- This is what makes the same Player object render correctly in both the main screen and minimap.
+
+
+8. The settings you are most likely to tweak
+--------------------------------------------
+
+In settings.py:
+
+WORLD_WIDTH
+WORLD_HEIGHT
+- Increase these if you want a larger playable world.
+
+MINIMAP_VIEW_MULTIPLIER
+- This is the main minimap tuning value.
+- Increase it if you want the minimap to show even more of the surrounding world.
+- Decrease it if you want the minimap to feel more zoomed in.
+
+Examples:
+
+MINIMAP_VIEW_MULTIPLIER = 2.25
+- Minimap shows much more area.
+- Player and objects will look smaller inside the minimap.
+
+MINIMAP_VIEW_MULTIPLIER = 1.25
+- Minimap shows less area.
+- Objects appear larger and easier to read.
+
+
+9. How to add a new camera-aware entity
+---------------------------------------
+
+If you add a Tree, Rock, Enemy, or Building class that extends Entity:
+
+1. Give it world coordinates in self.pos
+2. Give it an image and rect
+3. Call entity.draw(surface, camera)
+
+That is enough for the object to render correctly in both:
+- the main view
+- the minimap
+
+Example pattern:
+
+    class Tree(Entity):
+        def __init__(self, main, x, y):
+            image = Entity.load_image("assets", "trees", "oak.png")
+            super().__init__(main, x, y, image.get_width(), image.get_height(), tags={"tree"})
+            self.image = image
+
+    # In Game._render_world(...)
+    tree.draw(surface, camera)
+
+That one line is the important part.
+
+
+10. How to manually control a camera later
+------------------------------------------
+
+Right now the cameras follow the player.
+Later you can do other things.
+
+Example: stop following the player
+
+    self.camera.set_target(None)
+
+Then manually center it somewhere:
+
+    self.camera.center_on((1000, 800))
+
+Example: snap the camera to a building when it is selected
+
+    self.camera.center_on(selected_building.pos)
+
+Example: temporary cinematic camera
+
+    self.camera.set_target(None)
+    self.camera.center_on(cutscene_focus_point)
+
+Then restore player follow:
+
+    self.camera.set_target(self.player)
+
+
+11. How to zoom the main camera later
+-------------------------------------
+
+Right now the main camera uses a 1:1 view.
+That means it sees exactly VIEWPORT_WIDTH x VIEWPORT_HEIGHT world pixels.
+
+If you want zoom, you would give the main camera a different view size.
+
+Example: zoom OUT
+
+    self.camera = Camera(
+        WORLD_WIDTH,
+        WORLD_HEIGHT,
+        VIEWPORT_WIDTH,
+        VIEWPORT_HEIGHT,
+        view_width=int(VIEWPORT_WIDTH * 1.3),
+        view_height=int(VIEWPORT_HEIGHT * 1.3),
+        name="main",
+    )
+
+That shows more of the world, so everything looks smaller.
+
+Example: zoom IN
+
+    view_width=int(VIEWPORT_WIDTH * 0.8)
+    view_height=int(VIEWPORT_HEIGHT * 0.8)
+
+That shows less of the world, so everything looks larger.
+
+
+12. Why Game._render_world(surface, camera) is a good pattern
+-------------------------------------------------------------
+
+This is one of the most useful structural changes in the codebase.
+
+Instead of writing one render path for the main screen and another completely separate one for the minimap, you now have one shared render function.
+
+That gives you these benefits:
+
+- less duplicated drawing code
+- fewer bugs where one view is missing something the other view has
+- easy future expansion to more cameras later
+
+For example, later you could add:
+- a tactical map
+- a spectator camera
+- a replay camera
+- a split-screen second player camera
+
+All by calling the same render function with a different camera.
+
+
+13. Common mistakes to avoid when expanding this
+------------------------------------------------
+
+Mistake 1: moving rect instead of pos
+- Prefer changing self.pos for world movement.
+- Let the camera and Entity.update() handle rect syncing.
+
+Mistake 2: drawing with raw rect values when a camera exists
+- If you draw something in the world, convert it through the camera.
+- Otherwise it will appear in the wrong place when the camera moves.
+
+Mistake 3: forgetting that the minimap uses a different camera
+- The minimap is not just a screenshot anymore.
+- If you want something to appear there, it needs to be part of Game._render_world(...).
+
+Mistake 4: forgetting world bounds
+- If an object or camera moves outside the world, clamp it or validate it.
+
+
+14. Good next steps for you
+---------------------------
+
+These are good beginner-friendly expansions after this camera system:
+
+1. Add more world landmarks
+- Easy way to get comfortable with world-space vs screen-space thinking.
+
+2. Add trees or rocks as Entity subclasses
+- Then render them in Game._render_world(surface, camera).
+
+3. Draw the player's facing direction on the minimap
+- Example: a small line from the player dot in the facing direction.
+
+4. Add camera smoothing
+- Instead of snapping instantly to the target, lerp the camera offset.
+
+5. Add edge clamping for placed buildings
+- Reuse the world bounds logic already started by can_move_player_to().
+
+
+15. If you want to change the feel quickly
+------------------------------------------
+
+Change this first:
+
+    MINIMAP_VIEW_MULTIPLIER
+
+Then test these questions:
+
+- Can I still understand where my player is?
+- Does the white viewport rectangle feel useful?
+- Is the minimap too zoomed out to read landmarks?
+
+That tuning loop is normal.
+
+
+16. The mental model to keep
+----------------------------
+
+Think of the world and the camera as separate things.
+
+The world contains real positions.
+The camera chooses which slice of that world gets projected onto a surface.
+
+If you keep that model in your head, camera work gets much easier.

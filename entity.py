@@ -15,7 +15,7 @@ Subclassing guide
 * Override ``update(dt)`` to advance your own logic, then call ``super().update(dt)``
   at the **end** so that the base class syncs ``self.rect`` from ``self.pos`` and
   decrements any active timers.
-* Override ``draw(surface, camera_offset)`` when you need layers beyond the
+* Override ``draw(surface, camera)`` when you need layers beyond the
   default sprite blit (e.g. health bars, shadows, debug shapes).  Call
   ``super().draw(...)`` first to get the base sprite, then add your extras.
 * To load a sprite image safely (with a coloured fallback if the file is absent)
@@ -193,25 +193,46 @@ class Entity(pygame.sprite.Sprite):
 
     # ── Draw ──────────────────────────────────────────────────────────────────
 
-    def draw(self, surface: pygame.Surface, camera_offset: Optional[Vector2] = None) -> None:
-        """Blit the entity sprite onto *surface*, adjusted for *camera_offset*.
+    def draw(self, surface: pygame.Surface, camera=None) -> None:
+        """Blit the entity sprite onto *surface*.
 
         Parameters
         ----------
         surface       : target surface (the game world_surface)
-        camera_offset : world-space offset of the camera top-left corner.
-                        Subtract this from world coordinates to get screen
-                        coordinates.  Pass ``None`` if no camera is in use.
+        camera        : Camera | Vector2 | None
+                        Preferred: pass a ``Camera`` instance so the entity can
+                        be translated and scaled for the target surface.
+                        Backward-compatible: a raw Vector2 offset still works
+                        for 1:1 drawing without scale.
         """
         if self.image is None:
             return
 
-        # Translate from world space to screen space.
-        draw_rect = self.rect.copy()
-        if camera_offset is not None:
-            draw_rect = draw_rect.move(-int(camera_offset.x), -int(camera_offset.y))
+        draw_image = self.image
 
-        surface.blit(self.image, draw_rect)
+        if camera is not None and hasattr(camera, "world_rect_to_screen"):
+            # Camera-aware draw path: project the entity into the target
+            # surface and scale the sprite if this camera sees a different
+            # amount of world space than the render target's pixel size.
+            draw_rect = camera.world_rect_to_screen(self.rect)
+            collision_rect = camera.world_rect_to_screen(self.get_collision_rect())
+
+            if draw_rect.width <= 0 or draw_rect.height <= 0:
+                return
+
+            if draw_rect.size != self.image.get_size():
+                draw_image = pygame.transform.smoothscale(self.image, draw_rect.size)
+        else:
+            # Backward-compatible path: treat camera as a raw top-left world
+            # offset, which preserves the old behaviour for 1:1 rendering.
+            camera_offset = camera
+            draw_rect = self.rect.copy()
+            collision_rect = self.get_collision_rect()
+            if camera_offset is not None:
+                draw_rect = draw_rect.move(-int(camera_offset.x), -int(camera_offset.y))
+                collision_rect = collision_rect.move(-int(camera_offset.x), -int(camera_offset.y))
+
+        surface.blit(draw_image, draw_rect)
 
         # ── Debug overlays ────────────────────────────────────────────────
         if self.main.debug_mode:
@@ -219,8 +240,5 @@ class Entity(pygame.sprite.Sprite):
             pygame.draw.rect(surface, RED, draw_rect, 1)
 
             # Collision box (yellow) – may differ from sprite rect
-            col_rect = self.get_collision_rect()
-            if camera_offset is not None:
-                col_rect = col_rect.move(-int(camera_offset.x), -int(camera_offset.y))
-            pygame.draw.rect(surface, (255, 220, 0), col_rect, 1)
+            pygame.draw.rect(surface, (255, 220, 0), collision_rect, 1)
 

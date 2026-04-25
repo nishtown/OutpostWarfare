@@ -50,8 +50,8 @@ GLOW_AMBER   = (255, 200, 60)
 
 # ── Layout constants ─────────────────────────────────────────────────────────
 # All measurements in pixels; prefixed with _ to mark them as module-private.
-_PAD         = 8     # uniform padding inside the panel on all sides
-_MM_H        = 190   # height of the minimap image area
+_PAD         = UI_PANEL_PADDING         # uniform padding inside the panel on all sides
+_MM_H        = MINIMAP_SURFACE_HEIGHT   # height of the minimap image area
 _MM_LABEL_H  = 18    # vertical space reserved below the minimap for the label
 _SEC_HDR_H   = 26    # height of a section-divider + header row
 _BTN_COLS    = 2     # number of build-button columns
@@ -396,16 +396,19 @@ class BuildingButton(Button):
 # ── Minimap ───────────────────────────────────────────────────────────────────
 
 class Minimap:
-    """Real-time minimap rendered from the live game world surface.
+    """Real-time minimap rendered from a dedicated wider-range camera surface.
 
     The minimap sits at the very top of the right-hand UI panel inside a
-    raised stone frame.  Each frame it receives ``world_surface`` (the
-    off-screen surface that ``Game.draw`` rendered the world onto) and scales
-    it down to fit this widget's rect using ``pygame.transform.smoothscale``.
+    raised stone frame. Each frame it receives a pre-rendered surface from the
+    minimap camera. That camera follows the player just like the main camera,
+    but its visible world rectangle is much larger, so the minimap shows more
+    area than the player sees on the main screen.
 
-    This means the minimap always shows exactly what is currently in the
-    game viewport, automatically including terrain, buildings, trees, etc.
-    as they are added to the world renderer – no extra wiring required.
+    On top of the minimap image we also draw:
+
+    * the player's current position
+    * a white rectangle showing the main camera's visible area inside the
+      wider minimap region
 
     Attributes
     ----------
@@ -418,7 +421,34 @@ class Minimap:
         # drawn by inflating this rect by 8 px in each direction.
         self.rect = pygame.Rect(x, y, width, height)
 
-    def draw(self, surface, world_surface=None):
+    def _render_point_to_ui(self, point, source_size):
+        """Convert a point from the render-surface space into UI space."""
+        scale_x = self.rect.width / source_size[0]
+        scale_y = self.rect.height / source_size[1]
+        return (
+            self.rect.x + int(point.x * scale_x),
+            self.rect.y + int(point.y * scale_y),
+        )
+
+    def _render_rect_to_ui(self, rect, source_size):
+        """Convert a rect from the render-surface space into UI space."""
+        scale_x = self.rect.width / source_size[0]
+        scale_y = self.rect.height / source_size[1]
+        return pygame.Rect(
+            self.rect.x + int(rect.x * scale_x),
+            self.rect.y + int(rect.y * scale_y),
+            max(1, int(rect.width * scale_x)),
+            max(1, int(rect.height * scale_y)),
+        )
+
+    def draw(
+        self,
+        surface,
+        world_surface=None,
+        minimap_camera=None,
+        tracked_view_rect=None,
+        player_pos=None,
+    ):
         """Draw the minimap onto *surface*.
 
         Parameters
@@ -426,10 +456,14 @@ class Minimap:
         surface : pygame.Surface
             The main display surface (or the panel surface) to draw onto.
         world_surface : pygame.Surface or None
-            The live game-world render target from ``Game.world_surface``.
-            When provided it is scaled to minimap size and blitted directly,
-            giving a real-time overview.  When ``None`` a static placeholder
-            is shown instead (useful before the world system is connected).
+            The pre-rendered world surface produced for the minimap camera.
+        minimap_camera : Camera or None
+            The camera used to render ``world_surface``.
+        tracked_view_rect : pygame.Rect or None
+            The main camera's current world-space view rect.  It is projected
+            onto the minimap so the player can see what the main screen covers.
+        player_pos : pygame.Vector2 or None
+            Current player world position for the gold minimap marker.
         """
         # ── Outer raised stone frame ──────────────────────────────────────
         frame = self.rect.inflate(8, 8)
@@ -437,14 +471,17 @@ class Minimap:
         _bevel(surface, frame, raised=True, width=3)
 
         # ── Map content ───────────────────────────────────────────────────
+        source_size = (self.rect.width, self.rect.height)
         if world_surface is not None:
-            # Scale the live viewport surface down to minimap dimensions.
-            # smoothscale performs bilinear filtering, which looks better
-            # than nearest-neighbour at these small sizes.
-            scaled = pygame.transform.smoothscale(
-                world_surface, (self.rect.width, self.rect.height)
-            )
-            surface.blit(scaled, self.rect.topleft)
+            source_size = world_surface.get_size()
+
+            if world_surface.get_size() == self.rect.size:
+                surface.blit(world_surface, self.rect.topleft)
+            else:
+                scaled = pygame.transform.smoothscale(
+                    world_surface, (self.rect.width, self.rect.height)
+                )
+                surface.blit(scaled, self.rect.topleft)
         else:
             # ── Static placeholder (used before world is wired up) ────────
             # Fill with a dark-green base to suggest terrain.
@@ -466,10 +503,20 @@ class Minimap:
             pygame.draw.rect(surface, ( 50, 130, 35), (self.rect.x+138, self.rect.y+48, 5, 5))  # farm
             pygame.draw.rect(surface, ( 50, 130, 35), (self.rect.x+65,  self.rect.y+95, 5, 5))  # farm
 
+        # ── Main camera view box ──────────────────────────────────────────
+        if minimap_camera is not None and tracked_view_rect is not None:
+            view_box = minimap_camera.world_rect_to_screen(tracked_view_rect)
+            view_box = self._render_rect_to_ui(view_box, source_size)
+            pygame.draw.rect(surface, BLACK, view_box.inflate(2, 2), 1)
+            pygame.draw.rect(surface, WHITE, view_box, 1)
+
         # ── Player position dot ───────────────────────────────────────────
-        # Currently always centred; TODO: map actual world coords to minimap
-        # space once the camera / player position is tracked here.
-        cx, cy = self.rect.centerx, self.rect.centery
+        if minimap_camera is not None and player_pos is not None:
+            player_render_pos = minimap_camera.world_to_screen(player_pos)
+            cx, cy = self._render_point_to_ui(player_render_pos, source_size)
+        else:
+            cx, cy = self.rect.centerx, self.rect.centery
+
         pygame.draw.circle(surface, GOLD,  (cx, cy), 4)
         pygame.draw.circle(surface, WHITE, (cx, cy), 4, 1)   # thin white ring for contrast
 
@@ -598,7 +645,14 @@ class GameUI:
 
     # ── Draw ─────────────────────────────────────────────────────────────────
 
-    def draw(self, surface, world_surface=None):
+    def draw(
+        self,
+        surface,
+        world_surface=None,
+        minimap_camera=None,
+        tracked_view_rect=None,
+        player_pos=None,
+    ):
         """Render the entire UI panel onto *surface*.
 
         Parameters
@@ -607,9 +661,13 @@ class GameUI:
             The main display surface.  The panel is drawn at ``self.panel_x``
             which places it flush against the right edge of the window.
         world_surface : pygame.Surface or None
-            The off-screen game-world surface from ``Game.world_surface``.
-            Passed through to the minimap so it can display a live scaled view.
-            If ``None`` the minimap falls back to its placeholder graphics.
+            The dedicated minimap render surface.
+        minimap_camera : Camera or None
+            The wider-range camera used to render ``world_surface``.
+        tracked_view_rect : pygame.Rect or None
+            The main camera's current world-space view rect.
+        player_pos : pygame.Vector2 or None
+            Current player world position for the minimap marker.
         """
         px = self.panel_x
         py = self.panel_y
@@ -624,7 +682,13 @@ class GameUI:
         _panel_left_edge(surface, px, py, ph)
 
         # ── Minimap – passes the live world surface for real-time scaling ──
-        self.minimap.draw(surface, world_surface)
+        self.minimap.draw(
+            surface,
+            world_surface,
+            minimap_camera=minimap_camera,
+            tracked_view_rect=tracked_view_rect,
+            player_pos=player_pos,
+        )
 
         # ── Construct section ─────────────────────────────────────────────
         _divider(surface, px + _PAD, self._div1_y, inner_w)
