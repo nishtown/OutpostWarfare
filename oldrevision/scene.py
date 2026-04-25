@@ -1,4 +1,4 @@
-from settings import *
+from oldrevision.settings import *
 
 class Scene:
     def __init__(self, main):

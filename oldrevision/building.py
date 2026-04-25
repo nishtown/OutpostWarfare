@@ -4,8 +4,9 @@ import random
 import pygame
 from pygame import Vector2
 
-from settings import *
-from entity import *
+from oldrevision.settings import *
+from oldrevision.entity import *
+from oldrevision.tree import Tree
 
 
 class Building(Entity):
@@ -14,6 +15,8 @@ class Building(Entity):
     default_scale = (32, 32)
     default_tint = (255, 255, 255)
     default_build_time = 2.0
+    default_cost = {}
+    demolish_refund_ratio = 0.5
 
     def __init__(self, main, x, y, width=None, height=None, name=None, scale=None, tint=None, build_time=None):
         scale = scale or self.default_scale
@@ -29,10 +32,21 @@ class Building(Entity):
         self.build_elapsed = 0.0
         self.is_complete = False
         self.completion_triggered = False
+        self.build_cost = {resource: int(amount) for resource, amount in self.default_cost.items()}
 
         self.image = self.load_image()
         self.rect = self.image.get_rect(center=self.pos)
         self.rect.center = self.pos
+
+    @classmethod
+    def format_cost(cls, cost=None):
+        cost = cls.default_cost if cost is None else cost
+        parts = []
+        for resource_name in ("wood", "stone"):
+            amount = int(cost.get(resource_name, 0))
+            if amount > 0:
+                parts.append(f"{amount} {resource_name}")
+        return ", ".join(parts) if parts else "free"
 
     @classmethod
     def create_preview(cls):
@@ -63,6 +77,30 @@ class Building(Entity):
     def get_build_progress(self):
         return min(1.0, self.build_elapsed / self.build_time)
 
+    def get_demolition_refund(self):
+        refund = {}
+        for resource_name, amount in self.build_cost.items():
+            refund_amount = int(amount * self.demolish_refund_ratio)
+            if refund_amount > 0:
+                refund[resource_name] = refund_amount
+        return refund
+
+    def get_selection_lines(self):
+        lines = [self.name]
+        if self.is_complete:
+            lines.append("Status: Complete")
+        else:
+            lines.append(f"Building: {int(self.get_build_progress() * 100)}%")
+
+        if self.build_cost:
+            lines.append(f"Cost: {self.format_cost(self.build_cost)}")
+
+        refund = self.get_demolition_refund()
+        if refund:
+            lines.append(f"Refund: {self.format_cost(refund)}")
+
+        return lines
+
     def update(self, dt):
         if not self.is_complete:
             self.build_elapsed += dt
@@ -76,25 +114,30 @@ class Building(Entity):
 
         super().update(dt)
 
-    def draw(self, surface):
+    def draw(self, surface, camera_offset=None):
         if self.image is not None:
             img = self.image.copy()
 
             if not self.is_complete:
                 img.set_alpha(140)
 
-            surface.blit(img, self.rect)
+            original_image = self.image
+            self.image = img
+            super().draw(surface, camera_offset)
+            self.image = original_image
 
-            if self.main.debug_mode:
-                pygame.draw.rect(surface, RED, self.rect, 1)
-
-    def draw_overlay(self, surface):
+    def draw_overlay(self, surface, camera_offset=None):
         if not self.is_complete:
             bar_width = self.rect.width
             bar_height = 6
-            bar_x = self.rect.left
-            bar_y = self.rect.top - 10
             progress = self.get_build_progress()
+
+            draw_rect = self.rect.copy()
+            if camera_offset is not None:
+                draw_rect = draw_rect.move(-int(camera_offset.x), -int(camera_offset.y))
+
+            bar_x = draw_rect.left
+            bar_y = draw_rect.top - 10
 
             pygame.draw.rect(surface, (40, 40, 40), (bar_x, bar_y, bar_width, bar_height))
             pygame.draw.rect(surface, YELLOW, (bar_x, bar_y, int(bar_width * progress), bar_height))
@@ -106,6 +149,7 @@ class Tower(Building):
     default_scale = (32, 32)
     default_tint = (255, 255, 255)
     default_build_time = 2.0
+    default_cost = {"wood": 8, "stone": 6}
 
 
 class Wall(Building):
@@ -113,6 +157,7 @@ class Wall(Building):
     default_scale = (24, 24)
     default_tint = (185, 185, 205)
     default_build_time = 1.2
+    default_cost = {"wood": 2, "stone": 2}
 
 
 class Depot(Building):
@@ -120,6 +165,7 @@ class Depot(Building):
     default_scale = (40, 40)
     default_tint = (220, 190, 140)
     default_build_time = 3.5
+    default_cost = {"wood": 10, "stone": 4}
 
 
 class Lumberyard(Building):
@@ -127,6 +173,7 @@ class Lumberyard(Building):
     default_scale = (96, 96)
     default_tint = (150, 205, 120)
     default_build_time = 4.0
+    default_cost = {"wood": 12, "stone": 6}
     sprite_name = "lumberyard.png"
     worker_sprite_names = [
         "characterBlue (1).png",
@@ -148,6 +195,13 @@ class Lumberyard(Building):
         self.wood_stored = 0
         self.label_font = pygame.font.SysFont(None, 18)
         self.worker_scale = (12, 16)
+        self.farm_mode = False
+        self.farm_trees = []
+        self.farm_tree_count = 5
+        self.farm_spawn_radius = 140
+        self.farm_growth_time = 24.0
+        self.farm_retry_cooldown = 4.0
+        self.farm_retry_timer = 0.0
 
     def get_worker_sprite(self, sprite_name):
         if sprite_name not in self.worker_sprite_cache:
@@ -168,14 +222,93 @@ class Lumberyard(Building):
                 "sprite_name": sprite_name,
                 "base_sprite": self.get_worker_sprite(sprite_name),
                 "angle": 0.0,
+                "carrying": 0,
             })
 
-    def find_tree_target(self):
+    def get_world(self):
         game = getattr(self.main, "game", None)
         if game is None or not hasattr(game, "world"):
             return None
+        return game.world
 
-        world = game.world
+    def prune_farm_trees(self):
+        world = self.get_world()
+        if world is None:
+            self.farm_trees = []
+            return
+
+        active_farm_trees = []
+        for tree in self.farm_trees:
+            chunk = world.get_available_chunk(getattr(tree, "chunk_key", None)) if getattr(tree, "chunk_key", None) is not None else None
+            if chunk is not None and tree in chunk["trees"]:
+                active_farm_trees.append(tree)
+        self.farm_trees = active_farm_trees
+
+    def plant_farm_trees(self):
+        world = self.get_world()
+        if world is None:
+            return
+
+        planted = 0
+        attempt_count = self.farm_tree_count * 12
+        for attempt in range(attempt_count):
+            if len(self.farm_trees) + planted >= self.farm_tree_count:
+                break
+
+            angle = math.radians((attempt * (360 / max(1, attempt_count))) + random.uniform(-18.0, 18.0))
+            radius = random.randint(int(self.farm_spawn_radius * 0.45), int(self.farm_spawn_radius * 1.1))
+            tree_x = self.pos.x + math.cos(angle) * radius
+            tree_y = self.pos.y + math.sin(angle) * radius
+            tree = Tree(
+                self.main,
+                tree_x,
+                tree_y,
+                variant=random.choice(Tree.live_weighted_assets),
+                scale=Tree.get_random_scale(),
+                farm_tree=True,
+                mature=False,
+                growth_time=self.farm_growth_time,
+                owner=self,
+            )
+
+            if not world.can_place_tree(tree, ignore_building=self):
+                continue
+
+            world.add_tree(tree)
+            self.farm_trees.append(tree)
+            planted += 1
+
+        if planted > 0:
+            self.farm_mode = True
+
+    def update_tree_farm(self, dt):
+        world = self.get_world()
+        if world is None:
+            return
+
+        self.prune_farm_trees()
+        nearby_trees = world.get_nearby_trees(self.pos, self.harvest_radius)
+        wild_trees = [tree for tree in nearby_trees if getattr(tree, "owner", None) is not self]
+
+        if wild_trees:
+            self.farm_mode = False
+            self.farm_retry_timer = self.farm_retry_cooldown
+            return
+
+        self.farm_mode = True
+        self.farm_retry_timer = max(0.0, self.farm_retry_timer - dt)
+        if len(self.farm_trees) < self.farm_tree_count and self.farm_retry_timer <= 0:
+            self.plant_farm_trees()
+            self.farm_retry_timer = self.farm_retry_cooldown
+
+    def is_valid_tree_target(self, target):
+        return target is not None and target.can_harvest()
+
+    def find_tree_target(self):
+        world = self.get_world()
+        if world is None:
+            return None
+
         nearby_trees = world.get_nearby_trees(self.pos, self.harvest_radius)
         reserved = {
             worker["target"]
@@ -216,6 +349,8 @@ class Lumberyard(Building):
         if not self.is_complete or not self.workers:
             return
 
+        self.update_tree_farm(dt)
+
         for worker in self.workers:
             state = worker["state"]
             target = worker.get("target")
@@ -228,7 +363,7 @@ class Lumberyard(Building):
                 continue
 
             if state == "moving_to_tree":
-                if target is None or target.is_depleted:
+                if not self.is_valid_tree_target(target):
                     worker["target"] = None
                     worker["state"] = "idle"
                     continue
@@ -240,14 +375,15 @@ class Lumberyard(Building):
                 continue
 
             if state == "chopping":
-                if target is None or target.is_depleted:
+                if not self.is_valid_tree_target(target):
                     worker["target"] = None
                     worker["state"] = "idle"
                     continue
 
                 worker["timer"] -= dt
                 if worker["timer"] <= 0:
-                    target.harvest(1)
+                    if target.harvest(1):
+                        worker["carrying"] = getattr(target, "resource_yield", 1)
                     worker["state"] = "returning"
                 continue
 
@@ -261,27 +397,54 @@ class Lumberyard(Building):
             if state == "dropping_off":
                 worker["timer"] -= dt
                 if worker["timer"] <= 0:
-                    self.wood_stored += 1
+                    if worker.get("carrying", 0) > 0:
+                        self.wood_stored += worker["carrying"]
+                        worker["carrying"] = 0
                     worker["target"] = None
                     worker["state"] = "idle"
 
-    def draw(self, surface):
+    def draw(self, surface, camera_offset=None):
         if self.is_complete:
             radius = int(self.harvest_radius)
-            center = (int(self.pos.x), int(self.pos.y))
-            pygame.draw.circle(surface, (80, 120, 60), center, radius, 1)
+            center_x = int(self.pos.x)
+            center_y = int(self.pos.y)
+            if camera_offset is not None:
+                center_x -= int(camera_offset.x)
+                center_y -= int(camera_offset.y)
+            pygame.draw.circle(surface, (80, 120, 60), (center_x, center_y), radius, 1)
 
             for worker in self.workers:
                 worker_image = pygame.transform.rotate(worker["base_sprite"], worker["angle"])
-                worker_rect = worker_image.get_rect(midbottom=(int(worker["pos"].x), int(worker["pos"].y)))
+                worker_x = int(worker["pos"].x)
+                worker_y = int(worker["pos"].y)
+                if camera_offset is not None:
+                    worker_x -= int(camera_offset.x)
+                    worker_y -= int(camera_offset.y)
+                worker_rect = worker_image.get_rect(midbottom=(worker_x, worker_y))
                 surface.blit(worker_image, worker_rect)
 
-        super().draw(surface)
+        super().draw(surface, camera_offset)
 
-    def draw_overlay(self, surface):
-        super().draw_overlay(surface)
+    def draw_overlay(self, surface, camera_offset=None):
+        super().draw_overlay(surface, camera_offset)
 
         if self.is_complete:
+            text_midbottom = (self.rect.centerx, self.rect.top - 12)
+            if camera_offset is not None:
+                text_midbottom = (
+                    int(text_midbottom[0] - camera_offset.x),
+                    int(text_midbottom[1] - camera_offset.y),
+                )
             wood_text = self.label_font.render(f"Wood: {self.wood_stored}", True, WHITE)
-            text_rect = wood_text.get_rect(midbottom=(self.rect.centerx, self.rect.top - 12))
+            text_rect = wood_text.get_rect(midbottom=text_midbottom)
             surface.blit(wood_text, text_rect)
+
+    def get_selection_lines(self):
+        lines = super().get_selection_lines()
+        if self.is_complete:
+            lines.append(f"Wood Stored: {self.wood_stored}")
+            lines.append(f"Mode: {'Tree Farm' if self.farm_mode else 'Lumberyard'}")
+            if self.farm_trees:
+                growing_trees = sum(1 for tree in self.farm_trees if not tree.can_harvest())
+                lines.append(f"Farm Trees: {len(self.farm_trees)} ({growing_trees} growing)")
+        return lines
