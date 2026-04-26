@@ -85,6 +85,22 @@ class Enemy(Entity):
     _WAYPOINT_REACHED_DISTANCE = 16.0
     _COLLISION_W = 18
     _COLLISION_H = 18
+    _ANIMATION_DIRECTION_CODES = {
+        "down": "D",
+        "side": "S",
+        "up": "U",
+    }
+    _ANIMATION_ACTION_NAMES = {
+        "walk": "Walk",
+        "attack": "Attack",
+        "death": "Death",
+    }
+    _ANIMATION_FRAME_DURATIONS = {
+        "walk": 0.12,
+        "attack": 0.1,
+        "death": 0.12,
+    }
+    _ANIMATION_CACHE: dict[tuple[str, str], tuple[pygame.Surface, ...]] = {}
     _MINIMAP_MARKER_RADIUS = {
         "scout": 3,
         "raider": 4,
@@ -95,13 +111,7 @@ class Enemy(Entity):
     def __init__(self, main, spawn_point: SpawnPoint, tier_key: str = "scout") -> None:
         tier = ENEMY_TIERS[tier_key]
 
-        base_image = Entity.load_image(
-            "assets", "player", "player.png",
-            fallback_size=(32, 32),
-            fallback_color=(210, 100, 100),
-        )
-        base_image = base_image.copy()
-        base_image.fill((*tier.tint, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        base_image = self._get_animation_frames("down", "walk")[0].copy()
 
         super().__init__(
             main,
@@ -115,8 +125,7 @@ class Enemy(Entity):
         self.tier = tier
         self.spawn_point = spawn_point
         self.path_points = spawn_point.path_points
-        self.original_image = base_image
-        self.image = self.original_image.copy()
+        self.image = base_image
         self.collision_size = (self._COLLISION_W, self._COLLISION_H)
 
         self.max_health = tier.max_health
@@ -133,6 +142,13 @@ class Enemy(Entity):
         self.attack_timer = 0.0
         self.engagement_target = None
         self.attack_radius = max(self.collision_size) / 2 + 6
+        self.animation_action = "walk"
+        self.animation_direction = "down"
+        self.animation_frame_index = 0
+        self.animation_timer = 0.0
+        self.flip_x = False
+        self.death_animation_active = False
+        self.death_animation_finished = False
 
     @property
     def current_target(self) -> Vector2 | None:
@@ -142,12 +158,31 @@ class Enemy(Entity):
         return self.path_points[self.route_index]
 
     def take_damage(self, amount: float) -> None:
+        if self.death_animation_active or not self.alive:
+            return
+
         self.health -= max(0.0, float(amount))
         if self.health <= 0.0:
             self.alive = False
+            self.health = 0.0
+            self.attack_timer = 0.0
+            self.engagement_target = None
+            self.death_animation_active = True
+            self.death_animation_finished = False
+            self.animation_action = "death"
+            self.animation_frame_index = 0
+            self.animation_timer = 0.0
+            self._update_animation("death", 0.0, loop=False)
 
     def update(self, dt: float) -> None:
         """Move along the path, detour to attack targets, and wear the terrain."""
+        if self.death_animation_active:
+            if self._update_animation("death", dt, loop=False):
+                self.death_animation_active = False
+                self.death_animation_finished = True
+            super().update(dt)
+            return
+
         if not self.alive:
             return
 
@@ -167,10 +202,12 @@ class Enemy(Entity):
 
             if distance <= attack_distance:
                 self._attack_target(self.engagement_target)
+                self._set_animation_direction(target_pos - self.pos)
+                self._update_animation("attack", dt)
             else:
                 self._move_toward(target_pos, dt, manager)
+                self._update_animation("walk", dt)
 
-            self._sync_image()
             super().update(dt)
             return
 
@@ -184,7 +221,8 @@ class Enemy(Entity):
             blocker = manager.find_blocking_structure_at_world(target)
             if blocker is not None:
                 self.engagement_target = blocker
-                self._sync_image()
+                self._set_animation_direction(blocker.pos - self.pos)
+                self._update_animation("attack", dt)
                 super().update(dt)
                 return
 
@@ -204,7 +242,7 @@ class Enemy(Entity):
         if distance > 0:
             self._move_toward(target, dt, manager)
 
-        self._sync_image()
+        self._update_animation("walk", dt)
         super().update(dt)
 
     def _move_toward(self, target: Vector2, dt: float, manager) -> None:
@@ -214,6 +252,7 @@ class Enemy(Entity):
             return
 
         heading = direction.normalize()
+        self._set_animation_direction(heading)
         step = min(distance, self.speed * dt)
         next_pos = self.pos + heading * step
 
@@ -225,7 +264,6 @@ class Enemy(Entity):
                 return
 
         self.pos = next_pos
-        self.facing_angle = math.degrees(math.atan2(-heading.y, heading.x))
         self.main.game.world.add_path_wear(self.pos.x, self.pos.y, step / max(1.0, self.main.game.world.tile_size * 9.0))
 
     def _attack_target(self, target) -> None:
@@ -257,12 +295,82 @@ class Enemy(Entity):
     def _is_target_valid(self, target) -> bool:
         return target is not None and getattr(target, "alive", False)
 
-    def _sync_image(self) -> None:
-        self.image = pygame.transform.rotate(self.original_image, self.facing_angle)
+    @classmethod
+    def _get_animation_frames(cls, direction: str, action: str) -> tuple[pygame.Surface, ...]:
+        cache_key = (direction, action)
+        if cache_key in cls._ANIMATION_CACHE:
+            return cls._ANIMATION_CACHE[cache_key]
+
+        direction_code = cls._ANIMATION_DIRECTION_CODES[direction]
+        action_name = cls._ANIMATION_ACTION_NAMES[action]
+        sheet = Entity.load_image(
+            "assets", "enemy", f"{direction_code}_{action_name}.png",
+            fallback_size=(48 * 6, 48),
+            fallback_color=(210, 100, 100),
+        )
+        frame_count = max(1, sheet.get_width() // max(1, sheet.get_height()))
+        frame_width = max(1, sheet.get_width() // frame_count)
+
+        frames = []
+        for frame_index in range(frame_count):
+            frame_rect = pygame.Rect(frame_index * frame_width, 0, frame_width, sheet.get_height())
+            frames.append(sheet.subsurface(frame_rect).copy())
+
+        cls._ANIMATION_CACHE[cache_key] = tuple(frames)
+        return cls._ANIMATION_CACHE[cache_key]
+
+    def _set_animation_direction(self, direction: Vector2) -> None:
+        if direction.length_squared() <= 0.0001:
+            return
+
+        if abs(direction.x) > abs(direction.y):
+            self.animation_direction = "side"
+            self.flip_x = direction.x < 0
+        elif direction.y < 0:
+            self.animation_direction = "up"
+            self.flip_x = False
+        else:
+            self.animation_direction = "down"
+            self.flip_x = False
+
+    def _update_animation(self, action: str, dt: float, loop: bool = True) -> bool:
+        frames = self._get_animation_frames(self.animation_direction, action)
+        if action != self.animation_action:
+            self.animation_action = action
+            self.animation_frame_index = 0
+            self.animation_timer = 0.0
+
+        self.animation_timer += dt
+        frame_duration = self._ANIMATION_FRAME_DURATIONS[action]
+        animation_finished = False
+
+        while self.animation_timer >= frame_duration and len(frames) > 1:
+            self.animation_timer -= frame_duration
+            next_index = self.animation_frame_index + 1
+            if loop:
+                self.animation_frame_index = next_index % len(frames)
+            elif next_index >= len(frames):
+                self.animation_frame_index = len(frames) - 1
+                animation_finished = True
+                break
+            else:
+                self.animation_frame_index = next_index
+
+        frame = frames[self.animation_frame_index]
+        if self.animation_direction == "side" and self.flip_x:
+            frame = pygame.transform.flip(frame, True, False)
+
+        self.image = frame
         self.rect = self.image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
+        return animation_finished
 
     def draw(self, surface: pygame.Surface, camera=None) -> None:
+        if not self.alive and not self.death_animation_active:
+            return
+
         if camera is not None and getattr(camera, "name", "") == "minimap":
+            if not self.alive:
+                return
             self._draw_minimap_marker(surface, camera)
             return
 
@@ -389,7 +497,7 @@ class EnemyDirector:
             if enemy.reached_base:
                 self.base_hits += 1
                 breaches_this_frame += 1
-            elif enemy.alive:
+            elif enemy.alive or enemy.death_animation_active:
                 survivors.append(enemy)
         self.enemies = survivors
 

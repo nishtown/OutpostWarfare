@@ -1,0 +1,254 @@
+BUILDING WORKERS AND ENEMY SPRITES
+=================================
+
+Purpose
+-------
+This document explains the sprite and behavior pass that replaced several
+placeholder visuals and added the first automated worker loop for the
+lumberyard.
+
+
+1. Lumberyard visual upgrade
+----------------------------
+The lumberyard now uses the real building sprite from:
+
+- assets/buildings/lumberyard/4.png
+
+Important detail:
+- the lumberyard is no longer forced into the old 48x48 primitive placeholder
+- the sprite can render larger than one tile
+- it is drawn without the old black square outline
+
+The gameplay footprint is still handled separately from the art size.
+
+Why that matters:
+- the sprite can look like a proper building
+- the collision footprint can still stay readable and controllable
+- art scale and gameplay collision do not have to be identical
+
+
+2. Archer tower sprite selection
+--------------------------------
+The archer tower now uses real art from the archertower folder.
+
+Current rule:
+- use assets/buildings/archertower/2.png
+- slice out frame 2 from that sheet
+
+In code terms this means:
+- the file is treated as a 4-frame horizontal strip
+- the second frame is used as the current stage 1 tower visual
+
+This was done because the tower sheet contains multiple tower states in one
+image and the current prototype only needs one stable stage 1 presentation.
+
+Like the lumberyard:
+- the tower sprite can render taller than one tile
+- the old black boxed placeholder is no longer used for that structure
+
+
+3. Lumberyard workers
+---------------------
+The lumberyard now creates workers automatically when the structure is placed.
+
+Worker art source:
+- assets/workers/characterBlue (1).png
+- assets/workers/characterBlue (2).png
+- assets/workers/characterBlue (3).png
+- assets/workers/characterBlue (4).png
+- assets/workers/characterBlue (5).png
+
+Current worker behavior:
+- each lumberyard spawns 2 workers
+- each worker uses one of the available worker sprites for visual variety
+- workers leave the building, find nearby trees, harvest them, and bring wood back
+- delivered wood goes straight into the player inventory
+
+The worker state loop is:
+1. idle
+2. moving_to_tree
+3. chopping
+4. returning
+5. dropping_off
+
+There is also a planting branch:
+1. idle
+2. moving_to_plant_site
+3. planting
+4. returning
+
+Why the worker loop lives inside Structure:
+- the behavior is currently only for the lumberyard
+- keeping it local makes it easy to expand this one building without creating a
+  separate generic unit system too early
+- the world-object manager still owns the shared world data such as resource
+  nodes and placement checks
+
+
+4. Tree replanting behavior
+---------------------------
+The lumberyard does not only harvest trees.
+It also keeps a local tree supply alive by planting new trees nearby.
+
+Current logic:
+- if there are not enough tree nodes near the lumberyard, idle workers can pick
+  a valid planting location
+- planting uses the same resource-node layer as the rest of the game
+- planted trees become normal harvestable tree nodes once spawned
+
+This is important architecturally because it means the lumberyard does not use
+a separate fake tree system.
+It works with the same node type the player already harvests.
+
+That keeps these systems aligned:
+- player harvesting
+- worker harvesting
+- resource availability
+- future regrowth or economy tuning
+
+
+5. Resource-node helper additions
+---------------------------------
+To support worker planting, the world-object manager now exposes helper methods
+for resource-node queries and spawning.
+
+New responsibilities include:
+- finding resource nodes within a radius
+- checking whether a resource node can be spawned on a tile
+- spawning a new resource node at runtime
+
+This is the correct layer for that work because resource nodes belong to the
+shared world simulation, not to one specific building.
+
+
+6. Enemy sprite-sheet animation
+-------------------------------
+Enemies no longer use the temporary rotated player placeholder.
+
+They now load direction-specific sheets from assets/enemy:
+- D_Walk, D_Attack, D_Death
+- S_Walk, S_Attack, S_Death
+- U_Walk, U_Attack, U_Death
+
+Direction rules:
+- down uses D
+- up uses U
+- both left and right use S
+- left is handled by flipping the side frame horizontally
+
+Current action rules:
+- walking uses the walk sheet
+- attacking uses the attack sheet
+- dying uses the death sheet
+
+Sheet handling:
+- the sheets are treated as horizontal frame strips
+- frame width is derived from the sheet dimensions instead of hardcoding one
+  absolute frame count
+
+
+7. Death animation retention
+----------------------------
+Enemies are no longer removed instantly when their health reaches zero.
+
+Instead:
+- health drops to zero
+- the enemy switches into a death animation state
+- the director keeps the enemy around only while that death animation is active
+- once the animation finishes, the enemy is removed normally
+
+Why this change was needed:
+- otherwise the death sheets would never actually be visible in gameplay
+
+
+8. Rendering model
+------------------
+There are now two different structure render styles in the project.
+
+Primitive render style:
+- used by placeholder structures that still rely on generated shapes
+
+Sprite render style:
+- used by the lumberyard and current stage 1 archer tower
+- these use bottom-centered drawing so the visual art can extend upward while
+  the ground anchor stays on the placed world position
+
+This split is intentional.
+It lets specific buildings move to final art without forcing every other
+structure to be converted at the same time.
+
+
+9. Main extension points
+------------------------
+In world_objects.py:
+- Structure._load_building_sprite(...)
+  decides when a structure should use real art instead of generated shapes
+
+- Structure._update_lumberyard(...)
+  owns the lumberyard worker state machine
+
+- Structure._find_tree_target(...)
+  controls which nearby tree a worker chooses
+
+- Structure._find_plant_target(...)
+  controls where new trees may be planted
+
+- WorldObjectManager.get_resource_nodes_in_radius(...)
+  shared query helper for worker logic and future systems
+
+- WorldObjectManager.can_spawn_resource_node(...)
+  validates dynamic resource placement
+
+- WorldObjectManager.spawn_resource_node(...)
+  creates new tree nodes during gameplay
+
+In enemy.py:
+- Enemy._get_animation_frames(...)
+  loads and caches sprite-sheet frames
+
+- Enemy._set_animation_direction(...)
+  decides whether the sprite should use down, side, or up art
+
+- Enemy._update_animation(...)
+  advances walk, attack, and death animations
+
+- EnemyDirector.update(...)
+  now keeps enemies alive in the director only while a death animation is still
+  playing
+
+
+10. Good future improvements
+----------------------------
+1. Give workers proper pathfinding around walls and buildings instead of direct
+   movement.
+
+2. Add carrying props or separate harvest and planting animations for workers.
+
+3. Promote lumberyard workers into actual reusable units if more automated
+   building types are added later.
+
+4. Upgrade the archer tower to use the other frames or other tower sheets as
+   actual build and upgrade states.
+
+5. Give different enemy tiers their own sprite sets if the art pack expands.
+
+6. Add hit reactions, projectile impact effects, and corpse fade timing for the
+   new enemy animations.
+
+
+11. Mental model
+----------------
+The sprite pass changed presentation, but the important long-term change is the
+behavior link between buildings and the world simulation.
+
+The lumberyard is no longer just a placed object.
+It is now an active economic structure that:
+- consumes space in the world
+- dispatches workers
+- harvests shared resource nodes
+- replants future resource nodes
+- feeds the player economy automatically
+
+At the same time, enemies now use real directional animation data instead of a
+rotated placeholder, which makes the combat layer ready for future visual
+polish without changing the wave or AI architecture again.
