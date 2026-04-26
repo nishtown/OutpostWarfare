@@ -1,0 +1,249 @@
+SELECTION, UPGRADES, AND LAYERING REFINEMENTS
+===========================================
+
+Purpose
+-------
+This document explains the refinement pass that adjusted worker scale, slowed
+harvesting, changed wave pacing back to an automatic timer, added tower
+selection and upgrading, removed placeholder outline boxes, and fixed how tall
+sprites render relative to the player.
+
+
+1. Build-button deselection
+---------------------------
+Build buttons on the right-hand panel are now toggleable.
+
+Current behavior:
+- click a build button once to select that building for placement
+- click the same build button again to clear the selection
+
+Why this matters:
+- the player is no longer forced to place a building or swap to another button
+  just to cancel the current placement mode
+
+The toggle logic lives in gameui.py inside GameUI.handle_events(...).
+
+
+2. Structure selection in the world
+-----------------------------------
+The game now supports selecting placed structures directly from the world.
+
+Current behavior:
+- left-click a placed structure to select it
+- left-click the same structure again to deselect it
+- left-click empty world space to clear the current structure selection
+
+Selection uses structure hit detection from the world-object layer.
+For large sprites, selection is not limited to the small lower collision box.
+The visible sprite area can also be used for selection.
+
+This logic lives in:
+- game.py for click routing
+- world_objects.py for structure lookup and sprite-aware hit testing
+
+
+3. Tower upgrade menu in the right-hand panel
+---------------------------------------------
+Selecting a tower now changes the right-hand panel from build-placement status
+into structure status.
+
+Current tower panel behavior:
+- shows the selected tower name
+- shows tower level
+- shows tower health
+- shows tower combat stats such as range and damage
+- shows an upgrade button when another upgrade level is available
+
+Clicking the upgrade button consumes the upgrade cost and advances the tower to
+its next level.
+
+Current arrow tower upgrade stages:
+- level 1 uses archertower/2.png frame 2
+- level 2 uses archertower/3.png frame 2
+- level 3 uses archertower/4.png frame 2
+
+The current tower stat progression is defined in world_objects.py.
+The UI presentation lives in gameui.py.
+
+
+4. Automatic wave timer restored
+--------------------------------
+The manual start-wave button has been removed.
+
+New behavior:
+- the next wave starts automatically after a 10 second countdown
+- wave 1 also starts from an initial 10 second countdown
+- the right-hand panel now shows either:
+  - the active wave state, or
+  - the next-wave countdown
+
+This keeps the pacing automatic again while still making the timing visible to
+the player.
+
+The countdown state is owned by EnemyDirector in enemy.py.
+The display text is rendered by GameUI in gameui.py.
+
+
+5. Slower harvesting and slower lumberyard income
+-------------------------------------------------
+Resource income was rising too quickly, so both manual and automated harvesting
+were slowed down.
+
+Current changes:
+- tree harvest duration increased
+- rock harvest duration increased
+- each harvest tick now returns less resource than before
+- lumberyard worker chopping time is longer than the previous version
+
+Result:
+- resource growth is more controlled
+- placing a lumberyard is still useful, but it no longer floods the economy as
+  quickly as before
+
+Relevant code lives in world_objects.py:
+- RESOURCE_DEFINITIONS
+- ResourceNode.harvest(...)
+- Structure._update_lumberyard(...)
+
+
+6. Workers scaled down and rotated for vertical travel
+------------------------------------------------------
+Lumberyard workers are now much smaller than the previous pass.
+
+Current worker render size:
+- 12x18
+
+The workers also now rotate when moving up or down.
+This fixes the problem where they still looked side-on even during vertical
+travel.
+
+Current movement presentation rules:
+- horizontal movement uses flip for left/right
+- vertical movement rotates the worker sprite up or down
+
+This is handled in:
+- Structure._move_worker_toward(...)
+- Structure._draw_workers(...)
+
+
+7. Lower collider for tall sprites
+----------------------------------
+Large vertical sprites should not use their full art rectangle as the gameplay
+collision block.
+
+Current rule:
+- if a structure has tall art, the blocking collider stays down near the base
+- the visible sprite can extend upward while collision remains concentrated in
+  the lower footprint
+
+This helps two problems at once:
+- the player movement feels less like colliding with empty roof space
+- tall sprites can occlude the player correctly when the player walks behind
+  them
+
+The lower collider values are currently defined in world_objects.py through the
+footprint helper.
+
+
+8. Tall-sprite occlusion over the player
+----------------------------------------
+Previously the player was always drawn after structures, so the player appeared
+on top of large buildings even when walking behind them.
+
+New behavior:
+- normal world objects draw first
+- the player draws afterward
+- any tall structure that should visually cover the player is deferred and drawn
+  in a second structure pass on top of the player
+
+The occlusion decision is based on:
+- the full sprite world rect
+- the smaller lower collision box
+- the player's current collision position
+
+If the player is behind the tall sprite, the structure is drawn over the player.
+If the player is in front, the player stays on top.
+
+This split render path is coordinated in:
+- game.py
+- world_objects.py
+
+
+9. Removal of black outline boxes
+---------------------------------
+The placeholder black rectangular boxes around resource and object sprites have
+been removed.
+
+This mainly affects:
+- resource node primitive art
+- primitive fallback building art
+
+The goal is to stop the art from feeling like boxed debug placeholders while
+keeping the rest of the shape detail intact.
+
+
+10. Main extension points
+-------------------------
+In game.py:
+- handle_event(...)
+  routes world clicks into structure selection and tower upgrades
+
+- _render_world(...)
+  performs the split structure draw pass for tall-sprite occlusion
+
+In gameui.py:
+- handle_events(...)
+  toggles build buttons and routes upgrade-button clicks
+
+- set_selected_structure(...)
+  swaps the panel from build-selection mode into structure-inspection mode
+
+- set_wave_state(...)
+  now accepts countdown timing rather than manual-start state
+
+In world_objects.py:
+- Structure.get_upgrade_cost(...)
+- Structure.upgrade(...)
+- WorldObjectManager.upgrade_structure(...)
+  own the tower-upgrade data path
+
+- Structure.should_draw_over(...)
+  decides whether a tall sprite should be rendered above the player
+
+- Structure.contains_world_point(...)
+  supports selecting large visible structures even when the collider is smaller
+
+- Structure._move_worker_toward(...)
+  now controls both worker travel and facing presentation
+
+
+11. Good future improvements
+----------------------------
+1. Add explicit tower upgrade previews in the right-hand panel, including next
+   range, next damage, and next cooldown values.
+
+2. Add structure sell or demolish controls to the same selection panel.
+
+3. Add a hover outline before selection so it is easier to tell what will be
+   selected when large sprites overlap.
+
+4. Extend the tall-sprite layering rules to any future large tree, rock, or
+   decorative object sprites.
+
+5. Give upgraded towers unique projectile visuals or attack animations.
+
+6. Add an optional countdown warning announcement in the last few seconds before
+   each wave starts.
+
+
+12. Mental model
+----------------
+This refinement separated three ideas more clearly:
+- building placement is one mode that can be toggled on and off
+- placed structures are selectable world objects with their own panel state
+- tall art is presentation, while lower colliders remain gameplay data
+
+That separation is what makes the current UI and render behavior easier to grow:
+- build buttons can remain placement tools
+- towers can become upgradeable assets
+- oversized sprites can look good without breaking movement or readability

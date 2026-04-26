@@ -24,7 +24,7 @@ import pygame
 from pygame import Vector2
 
 from entity import Entity
-from settings import BLACK, DARK_BROWN, FONT_SMALL, GOLD, GREEN, LIGHT_GRAY, ORANGE, RED, TILE_SIZE, WHITE
+from settings import DARK_BROWN, FONT_SMALL, GOLD, GREEN, LIGHT_GRAY, ORANGE, RED, TILE_SIZE, WHITE
 
 
 BUILDING_SPRITE_PATHS = {
@@ -37,9 +37,42 @@ WORKER_SPRITE_PATHS = [
 ARCHER_TOWER_STAGE_1_SHEET = ("assets", "buildings", "archertower", "2.png")
 ARCHER_TOWER_STAGE_1_FRAME_INDEX = 1
 ARCHER_TOWER_STAGE_FRAME_COUNT = 4
+ARROW_TOWER_LEVEL_SHEETS = [
+    ("assets", "buildings", "archertower", "2.png"),
+    ("assets", "buildings", "archertower", "3.png"),
+    ("assets", "buildings", "archertower", "4.png"),
+]
 RESOURCE_TERRAIN_RULES = {
     "tree": {"grass", "forest", "sand"},
     "rock": {"grass", "forest", "sand"},
+}
+TOWER_UPGRADE_LEVELS = {
+    "arrow_tower": (
+        {
+            "max_health": 150.0,
+            "tower_range": TILE_SIZE * 3.7,
+            "projectile_damage": 14.0,
+            "projectile_speed": 340.0,
+            "attack_cooldown": 0.85,
+            "upgrade_cost": None,
+        },
+        {
+            "max_health": 185.0,
+            "tower_range": TILE_SIZE * 4.15,
+            "projectile_damage": 20.0,
+            "projectile_speed": 370.0,
+            "attack_cooldown": 0.74,
+            "upgrade_cost": {"wood": 55, "stone": 24},
+        },
+        {
+            "max_health": 225.0,
+            "tower_range": TILE_SIZE * 4.65,
+            "projectile_damage": 27.0,
+            "projectile_speed": 405.0,
+            "attack_cooldown": 0.64,
+            "upgrade_cost": {"wood": 72, "stone": 32, "gold": 20},
+        },
+    ),
 }
 
 
@@ -130,8 +163,8 @@ class ResourceNodeDefinition:
 
 
 RESOURCE_DEFINITIONS = {
-    "tree": ResourceNodeDefinition("tree", "Tree", "wood", "Chopping tree", 1.15, 8, 14),
-    "rock": ResourceNodeDefinition("rock", "Rock", "stone", "Mining rock", 1.55, 6, 11),
+    "tree": ResourceNodeDefinition("tree", "Tree", "wood", "Chopping tree", 2.2, 8, 14),
+    "rock": ResourceNodeDefinition("rock", "Rock", "stone", "Mining rock", 2.9, 6, 11),
 }
 
 RESOURCE_COST_ORDER = ("wood", "stone", "gold", "food")
@@ -167,10 +200,9 @@ def _footprint_for_key(building_key: str) -> tuple[int, int]:
         size = int(TILE_SIZE * 0.42)
         return size, size
     if building_key == "lumberyard":
-        return int(TILE_SIZE * 1.42), int(TILE_SIZE * 0.92)
+        return int(TILE_SIZE * 1.14), int(TILE_SIZE * 0.42)
     if building_key == "arrow_tower":
-        size = int(TILE_SIZE * 0.82)
-        return size, size
+        return int(TILE_SIZE * 0.54), int(TILE_SIZE * 0.34)
     size = int(TILE_SIZE * 0.68)
     return size, size
 
@@ -180,18 +212,18 @@ class Structure(Entity):
 
     _BUILDING_SPRITE_CACHE: dict[str, pygame.Surface] = {}
     _WORKER_SPRITE_CACHE: list[pygame.Surface] = []
-    _WORKER_RENDER_SIZE = (24, 36)
+    _WORKER_RENDER_SIZE = (12, 18)
     _LUMBERYARD_WORKER_COUNT = 2
     _LUMBERYARD_HARVEST_RADIUS = TILE_SIZE * 4.0
     _LUMBERYARD_REPLANT_RADIUS = TILE_SIZE * 3.8
     _LUMBERYARD_TREE_TARGET = 6
     _LUMBERYARD_WORKER_SPEED = 58.0
-    _LUMBERYARD_CHOP_TIME = 1.1
+    _LUMBERYARD_CHOP_TIME = 2.6
     _LUMBERYARD_DROP_TIME = 0.45
     _LUMBERYARD_PLANT_TIME = 1.2
 
     def __init__(self, main, definition: BuildDefinition, position: Vector2) -> None:
-        image = self._build_surface(definition)
+        image = self._build_surface(definition, level=1)
         super().__init__(
             main,
             position.x,
@@ -214,9 +246,16 @@ class Structure(Entity):
         self.armed = definition.is_trap
         self.revealed = not definition.hidden_to_enemy
         self.attack_radius = max(self.collision_size) / 2 + 8
+        self.level = 1
+        self.max_level = max(1, len(TOWER_UPGRADE_LEVELS.get(definition.key, ())))
+        self.tower_range = definition.tower_range
+        self.projectile_damage = definition.projectile_damage
+        self.projectile_speed = definition.projectile_speed
+        self.attack_cooldown = definition.attack_cooldown
         self.workers = self._create_workers() if definition.key == "lumberyard" else []
         self.wood_delivered = 0
         self.trees_planted = 0
+        self._apply_level_stats(reset_health=True)
 
     @property
     def is_detour_candidate(self) -> bool:
@@ -226,11 +265,30 @@ class Structure(Entity):
     def is_trap(self) -> bool:
         return self.definition.is_trap
 
+    @property
+    def is_upgradeable(self) -> bool:
+        return self.definition.key in TOWER_UPGRADE_LEVELS and self.level < self.max_level
+
+    def get_upgrade_cost(self) -> dict[str, int] | None:
+        stages = TOWER_UPGRADE_LEVELS.get(self.definition.key)
+        if not stages or self.level >= len(stages):
+            return None
+        return stages[self.level].get("upgrade_cost")
+
     def take_damage(self, amount: float) -> None:
         self.revealed = True
         self.health -= max(0.0, float(amount))
         if self.health <= 0.0:
             self.alive = False
+
+    def upgrade(self) -> bool:
+        if not self.is_upgradeable:
+            return False
+
+        current_ratio = 1.0 if self.max_health <= 0 else max(0.0, self.health / self.max_health)
+        self.level += 1
+        self._apply_level_stats(reset_health=False, current_ratio=current_ratio)
+        return True
 
     def reveal(self) -> None:
         self.revealed = True
@@ -252,7 +310,7 @@ class Structure(Entity):
 
         super().update(dt)
 
-    def draw(self, surface: pygame.Surface, camera=None) -> None:
+    def draw(self, surface: pygame.Surface, camera=None, selected: bool = False) -> None:
         draw_image = self.image
         if self.is_trap and not self.revealed and (camera is None or getattr(camera, "name", "") != "minimap"):
             draw_image = self.image.copy()
@@ -280,8 +338,32 @@ class Structure(Entity):
         if getattr(camera, "name", "") != "minimap" and self.health < self.max_health:
             self._draw_health_bar(surface, camera)
 
+        if selected and getattr(camera, "name", "") != "minimap":
+            self._draw_selection_outline(surface, camera)
+
         if self.main.debug_mode and camera is not None and hasattr(camera, "world_rect_to_screen"):
             pygame.draw.rect(surface, RED, camera.world_rect_to_screen(self.get_collision_rect()), 1)
+
+    def get_sprite_world_rect(self) -> pygame.Rect:
+        draw_rect = self.image.get_rect()
+        draw_rect.midbottom = (int(self.pos.x), int(self.pos.y))
+        return draw_rect
+
+    def contains_world_point(self, world_position) -> bool:
+        point = (int(world_position.x), int(world_position.y))
+        if self.get_collision_rect().collidepoint(point):
+            return True
+        return self.get_sprite_world_rect().collidepoint(point)
+
+    def should_draw_over(self, entity) -> bool:
+        if entity is None or self.image.get_height() <= TILE_SIZE:
+            return False
+
+        entity_rect = entity.get_collision_rect()
+        if not self.get_sprite_world_rect().colliderect(entity_rect):
+            return False
+
+        return entity_rect.bottom <= self.get_collision_rect().bottom
 
     def _world_objects(self):
         game = getattr(self.main, "game", None)
@@ -326,8 +408,9 @@ class Structure(Entity):
                     "target": None,
                     "target_pos": None,
                     "timer": 0.0,
-                    "sprite": sprite,
+                    "base_sprite": sprite,
                     "flip_x": False,
+                    "rotation_angle": 0.0,
                     "carrying_wood": 0,
                     "carrying_sapling": False,
                 }
@@ -370,7 +453,7 @@ class Structure(Entity):
 
                 if self._move_worker_toward(worker, target.pos, dt):
                     worker["state"] = "chopping"
-                    worker["timer"] = self._LUMBERYARD_CHOP_TIME
+                    worker["timer"] = max(self._LUMBERYARD_CHOP_TIME, getattr(target, "action_duration", self._LUMBERYARD_CHOP_TIME))
                 continue
 
             if state == "chopping":
@@ -483,7 +566,13 @@ class Structure(Entity):
             worker["pos"] = target_position
             return True
 
-        worker["flip_x"] = direction.x < -0.5
+        if abs(direction.y) > abs(direction.x):
+            worker["rotation_angle"] = -90 if direction.y < 0 else 90
+            worker["flip_x"] = False
+        else:
+            worker["rotation_angle"] = 0.0
+            worker["flip_x"] = direction.x < -0.5
+
         step = min(distance, self._LUMBERYARD_WORKER_SPEED * dt)
         worker["pos"] += direction.normalize() * step
         return step >= distance - 0.001
@@ -501,7 +590,9 @@ class Structure(Entity):
             if worker["state"] == "idle" and worker["pos"].distance_squared_to(self.pos) < 4.0:
                 continue
 
-            draw_image = worker["sprite"]
+            draw_image = worker["base_sprite"]
+            if worker.get("rotation_angle"):
+                draw_image = pygame.transform.rotate(draw_image, worker["rotation_angle"])
             if worker.get("flip_x"):
                 draw_image = pygame.transform.flip(draw_image, True, False)
 
@@ -539,6 +630,46 @@ class Structure(Entity):
         draw_rect.midbottom = (int(self.pos.x), int(self.pos.y))
         return draw_rect
 
+    def _draw_selection_outline(self, surface: pygame.Surface, camera) -> None:
+        if camera is None or not hasattr(camera, "world_rect_to_screen"):
+            return
+
+        collision_rect = camera.world_rect_to_screen(self.get_collision_rect())
+        outline_rect = collision_rect.inflate(10, 10)
+        pygame.draw.ellipse(surface, GOLD, outline_rect, 2)
+
+    def _apply_level_stats(self, reset_health: bool = False, current_ratio: float = 1.0) -> None:
+        stage_data = self._get_level_data()
+        if stage_data is None:
+            self.max_health = self.definition.max_health
+            self.tower_range = self.definition.tower_range
+            self.projectile_damage = self.definition.projectile_damage
+            self.projectile_speed = self.definition.projectile_speed
+            self.attack_cooldown = self.definition.attack_cooldown
+            if reset_health:
+                self.health = self.max_health
+            return
+
+        self.max_health = float(stage_data["max_health"])
+        self.tower_range = float(stage_data["tower_range"])
+        self.projectile_damage = float(stage_data["projectile_damage"])
+        self.projectile_speed = float(stage_data["projectile_speed"])
+        self.attack_cooldown = float(stage_data["attack_cooldown"])
+        if reset_health:
+            self.health = self.max_health
+        else:
+            self.health = max(1.0, self.max_health * current_ratio)
+
+        self.image = self._build_surface(self.definition, level=self.level)
+        self.original_image = self.image.copy()
+        self.rect = self.image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
+
+    def _get_level_data(self):
+        stages = TOWER_UPGRADE_LEVELS.get(self.definition.key)
+        if not stages:
+            return None
+        return stages[self.level - 1]
+
     def _draw_health_bar(self, surface: pygame.Surface, camera) -> None:
         if camera is None or not hasattr(camera, "world_to_screen"):
             return
@@ -553,8 +684,8 @@ class Structure(Entity):
         pygame.draw.rect(surface, WHITE, rect, 1)
 
     @staticmethod
-    def _build_surface(definition: BuildDefinition) -> pygame.Surface:
-        sprite_surface = Structure._load_building_sprite(definition)
+    def _build_surface(definition: BuildDefinition, level: int = 1) -> pygame.Surface:
+        sprite_surface = Structure._load_building_sprite(definition, level=level)
         if sprite_surface is not None:
             return sprite_surface
 
@@ -600,12 +731,11 @@ class Structure(Entity):
             pygame.draw.rect(surface, accent, (12, 18, 24, 16))
             pygame.draw.polygon(surface, (90, 46, 40), [(10, 18), (24, 10), (38, 18)])
 
-        pygame.draw.rect(surface, BLACK, surface.get_rect(), 1)
         return surface
 
     @classmethod
-    def _load_building_sprite(cls, definition: BuildDefinition) -> pygame.Surface | None:
-        cache_key = definition.key
+    def _load_building_sprite(cls, definition: BuildDefinition, level: int = 1) -> pygame.Surface | None:
+        cache_key = f"{definition.key}:{level}"
         if cache_key in cls._BUILDING_SPRITE_CACHE:
             return cls._BUILDING_SPRITE_CACHE[cache_key].copy()
 
@@ -618,7 +748,7 @@ class Structure(Entity):
             )
         elif definition.key == "arrow_tower":
             sheet = Entity.load_image(
-                *ARCHER_TOWER_STAGE_1_SHEET,
+                *ARROW_TOWER_LEVEL_SHEETS[max(0, min(level - 1, len(ARROW_TOWER_LEVEL_SHEETS) - 1))],
                 fallback_size=(70 * ARCHER_TOWER_STAGE_FRAME_COUNT, 130),
                 fallback_color=definition.color,
             )
@@ -667,7 +797,7 @@ class ResourceNode(Entity):
         if not self.alive or self.remaining_yield <= 0:
             return {}
 
-        amount = min(3, self.remaining_yield)
+        amount = min(2, self.remaining_yield)
         self.remaining_yield -= amount
         if self.remaining_yield <= 0:
             self.alive = False
@@ -695,7 +825,6 @@ class ResourceNode(Entity):
             pygame.draw.polygon(surface, (86, 86, 86), [(12, 33), (18, 18), (30, 13), (36, 24), (31, 35), (18, 37)], 2)
             pygame.draw.circle(surface, (152, 152, 152), (23, 22), 4)
 
-        pygame.draw.rect(surface, BLACK, surface.get_rect(), 1)
         return surface
 
 
@@ -785,11 +914,20 @@ class WorldObjectManager:
         self.resource_nodes = [node for node in self.resource_nodes if node.alive]
         self.projectiles = [projectile for projectile in self.projectiles if projectile.alive]
 
-    def draw(self, surface: pygame.Surface, camera) -> None:
-        for node in self.resource_nodes:
-            node.draw(surface, camera)
+    def draw(self, surface: pygame.Surface, camera, occlusion_target=None, selected_structure=None, overlay_pass: bool = False) -> None:
+        if overlay_pass and occlusion_target is None:
+            return
+
+        if not overlay_pass:
+            for node in self.resource_nodes:
+                node.draw(surface, camera)
+
         for structure in self.structures:
-            structure.draw(surface, camera)
+            draw_over_target = occlusion_target is not None and structure.should_draw_over(occlusion_target)
+            if overlay_pass != draw_over_target:
+                continue
+
+            structure.draw(surface, camera, selected=structure is selected_structure)
 
     def draw_projectiles(self, surface: pygame.Surface, camera) -> None:
         for projectile in self.projectiles:
@@ -823,6 +961,31 @@ class WorldObjectManager:
         self.structures.append(structure)
         self._announce(f"Placed {definition.label}", accent=GOLD, duration=1.3)
         return True, definition.label
+
+    def find_structure_at_world(self, world_position):
+        point = Vector2(world_position)
+        for structure in reversed(self.structures):
+            if not structure.alive:
+                continue
+            if structure.contains_world_point(point):
+                return structure
+        return None
+
+    def upgrade_structure(self, structure, player) -> tuple[bool, str]:
+        if structure is None or not getattr(structure, "alive", False):
+            return False, "Nothing selected"
+        if not getattr(structure, "is_upgradeable", False):
+            return False, "That tower is already maxed"
+
+        upgrade_cost = structure.get_upgrade_cost() or {}
+        if not player.consume_resources(upgrade_cost):
+            return False, "Not enough resources"
+        if not structure.upgrade():
+            player.refund_resources(upgrade_cost)
+            return False, "Upgrade failed"
+
+        self._announce(f"{structure.definition.label} upgraded", accent=GREEN, duration=1.5)
+        return True, structure.definition.label
 
     def find_harvest_target(self, clicked_world_pos, player_pos, max_range: float, click_radius: float = 48.0):
         clicked = Vector2(clicked_world_pos)
@@ -973,22 +1136,21 @@ class WorldObjectManager:
             return
 
         for structure in self.structures:
-            definition = structure.definition
-            if not structure.alive or definition.tower_range <= 0.0 or structure.cooldown_remaining > 0.0:
+            if not structure.alive or structure.tower_range <= 0.0 or structure.cooldown_remaining > 0.0:
                 continue
 
             candidates = [
                 enemy for enemy in living_enemies
-                if enemy.pos.distance_to(structure.pos) <= definition.tower_range
+                if enemy.pos.distance_to(structure.pos) <= structure.tower_range
             ]
             if not candidates:
                 continue
 
             target = min(candidates, key=lambda enemy: enemy.pos.distance_squared_to(structure.pos))
             self.projectiles.append(
-                ArrowProjectile(structure.pos, target, definition.projectile_damage, definition.projectile_speed)
+                ArrowProjectile(structure.pos, target, structure.projectile_damage, structure.projectile_speed)
             )
-            structure.cooldown_remaining = definition.attack_cooldown
+            structure.cooldown_remaining = structure.attack_cooldown
 
     def _spawn_resource_nodes(self) -> None:
         used_tiles: list[tuple[int, int]] = []

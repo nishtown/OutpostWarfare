@@ -425,7 +425,7 @@ class EnemyDirector:
     _MAX_EDGE_SEARCH_MARGINS = 4
     _MIN_SPAWN_TILE_SPACING = 10
     _SPAWN_INTERVAL = 0.9
-    _WAVE_COOLDOWN = 4.0
+    _WAVE_COOLDOWN = 10.0
     _BASE_MARKER_RADIUS = TILE_SIZE * 0.35
 
     def __init__(self, main, world, base_position, seed: int, announce_callback=None) -> None:
@@ -448,7 +448,8 @@ class EnemyDirector:
         self.pending_spawns: list[str] = []
         self.spawn_timer = 0.0
         self.wave_in_progress = False
-        self.can_start_next_wave = True
+        self.can_start_next_wave = False
+        self.time_until_next_wave = self._WAVE_COOLDOWN
         self._refresh_active_spawn_points()
 
     @property
@@ -476,7 +477,7 @@ class EnemyDirector:
         Enemy tier composition gradually gets more dangerous as the wave number
         rises, but the rules are contained here so they are easy to change.
         """
-        if not self.can_start_next_wave or not self.spawn_points:
+        if self.wave_in_progress or self.pending_spawns or not self.spawn_points:
             return
 
         self.wave_number += 1
@@ -485,6 +486,7 @@ class EnemyDirector:
         self.spawn_timer = 0.0
         self.wave_in_progress = True
         self.can_start_next_wave = False
+        self.time_until_next_wave = self._WAVE_COOLDOWN
         self._announce(f"Wave {self.wave_number} approaching", accent=GOLD, duration=3.2)
 
     def update(self, dt: float) -> None:
@@ -513,7 +515,13 @@ class EnemyDirector:
                 self.spawn_timer += self._SPAWN_INTERVAL
         elif self.wave_in_progress and not self.enemies:
             self.wave_in_progress = False
-            self.can_start_next_wave = True
+            self.can_start_next_wave = False
+            self.time_until_next_wave = self._WAVE_COOLDOWN
+
+        if not self.wave_in_progress and not self.enemies and not self.pending_spawns and self.spawn_points:
+            self.time_until_next_wave = max(0.0, self.time_until_next_wave - dt)
+            if self.time_until_next_wave <= 0.0:
+                self.start_next_wave()
 
     def draw(self, surface: pygame.Surface, camera) -> None:
         self._draw_spawn_points(surface, camera)

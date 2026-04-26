@@ -734,6 +734,7 @@ class GameUI:
 
         # The building type string that is queued for placement, or None.
         self.selected_building = None
+        self.selected_structure = None
 
         # y coordinate where the selected-building status strip starts.
         self._status_y = self._res_top + _RES_PANEL_H + 8
@@ -742,9 +743,10 @@ class GameUI:
         # Announcements are drawn above the main viewport rather than inside
         # the side panel so important events stay visible during play.
         self.announcements = AnnouncementFeed(pygame.Rect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT))
-        self.wave_button = Button(px + _PAD, self._wave_button_y, inner_w, 36, "Start Wave 1")
-        self.can_start_wave = True
+        self.upgrade_button = Button(px + _PAD, self._wave_button_y, inner_w, 36, "Upgrade")
         self.next_wave_number = 1
+        self.wave_timer_remaining = 10.0
+        self.wave_in_progress = False
 
     # ── Events ───────────────────────────────────────────────────────────────
 
@@ -758,24 +760,39 @@ class GameUI:
             # Update hover flag on each button based on the new cursor position.
             for btn in self.build_buttons:
                 btn.hovered = btn.is_hovered(event.pos)
-            self.wave_button.hovered = self.can_start_wave and self.wave_button.is_hovered(event.pos)
+            self.upgrade_button.hovered = (
+                self.selected_structure is not None
+                and getattr(self.selected_structure, "is_upgradeable", False)
+                and self.upgrade_button.is_hovered(event.pos)
+            )
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            if self.can_start_wave and self.wave_button.is_hovered(event.pos):
-                return "start_next_wave"
+            if self.upgrade_button.hovered:
+                return "upgrade_selected_structure"
 
             # Left-click selects the hovered building and deselects all others.
             for btn in self.build_buttons:
                 if btn.hovered:
-                    # Clear previous selection across all buttons.
-                    for b in self.build_buttons:
-                        b.selected = False
-                    btn.selected = True
-                    self.selected_building = btn.building_type
-                    print(f"Selected building: {btn.building_type}")
-                    break
+                    if self.selected_building == btn.building_type:
+                        self.clear_build_selection()
+                    else:
+                        self.clear_build_selection()
+                        btn.selected = True
+                        self.selected_building = btn.building_type
+                        self.selected_structure = None
+                    return "build_selection_changed"
 
         return None
+
+    def clear_build_selection(self):
+        self.selected_building = None
+        for btn in self.build_buttons:
+            btn.selected = False
+
+    def set_selected_structure(self, structure):
+        self.selected_structure = structure
+        if structure is not None:
+            self.clear_build_selection()
 
     def update(self, dt):
         """Advance transient UI state such as queued announcements."""
@@ -785,10 +802,10 @@ class GameUI:
         """Queue a banner announcement for the player."""
         self.announcements.push(text, accent=accent, duration=duration, key=key, cooldown=cooldown)
 
-    def set_wave_state(self, can_start_wave, next_wave_number):
-        self.can_start_wave = bool(can_start_wave)
+    def set_wave_state(self, next_wave_number, wave_timer_remaining, wave_in_progress):
         self.next_wave_number = int(next_wave_number)
-        self.wave_button.set_text(f"Start Wave {self.next_wave_number}")
+        self.wave_timer_remaining = max(0.0, float(wave_timer_remaining))
+        self.wave_in_progress = bool(wave_in_progress)
 
     # ── Draw ─────────────────────────────────────────────────────────────────
 
@@ -898,18 +915,52 @@ class GameUI:
         sy = self._status_y
         if sy + 92 < py + ph - 40:
             _divider(surface, px + _PAD, sy, inner_w)
-            if self.selected_building:
+            if self.selected_structure is not None:
+                structure = self.selected_structure
+                title_text = structure.definition.label
+                if getattr(structure, "max_level", 1) > 1:
+                    title_text += f" Lv {structure.level}/{structure.max_level}"
+                lbl = FONT_MEDIUM.render(title_text, True, GOLD)
+                health_text = f"Health: {int(structure.health)}/{int(structure.max_health)}"
+                hint_lines = [health_text]
+
+                if structure.definition.key == "arrow_tower":
+                    hint_lines.append(
+                        f"Range {int(structure.tower_range)}  Damage {int(structure.projectile_damage)}"
+                    )
+                elif structure.definition.key == "lumberyard":
+                    hint_lines.append(f"Wood Delivered: {structure.wood_delivered}")
+                    hint_lines.append(f"Trees Planted: {structure.trees_planted}")
+                else:
+                    hint_lines.append("Click the world to deselect")
+
+                surface.blit(lbl, (px + _PAD + 4, sy + 6))
+                for index, line in enumerate(hint_lines[:3]):
+                    hint = FONT_SMALL.render(line, True, PARCHMENT_DK)
+                    surface.blit(hint, (px + _PAD + 4, sy + 8 + lbl.get_height() + index * 16))
+            elif self.selected_building:
                 # Convert snake_case building type to a Title Case display name.
                 name_txt = self.selected_building.replace("_", " ").title()
                 lbl  = FONT_MEDIUM.render(name_txt, True, GOLD)
                 cost_text = format_cost_text(BUILD_DEFINITIONS[self.selected_building].cost)
-                hint = FONT_SMALL.render(f"Cost: {cost_text}", True, PARCHMENT_DK)
+                hint = FONT_SMALL.render(f"Cost: {cost_text}  |  Click again to cancel", True, PARCHMENT_DK)
                 surface.blit(lbl,  (px + _PAD + 4, sy + 6))
                 surface.blit(hint, (px + _PAD + 4, sy + 6 + lbl.get_height() + 2))
 
-        if self.can_start_wave and self._wave_button_y + self.wave_button.rect.height < py + ph - 42:
+        if self._wave_button_y + 36 < py + ph - 42:
             _divider(surface, px + _PAD, self._wave_button_y - 10, inner_w)
-            self.wave_button.draw(surface)
+            if self.selected_structure is not None and getattr(self.selected_structure, "is_upgradeable", False):
+                cost_text = format_cost_text(self.selected_structure.get_upgrade_cost() or {})
+                self.upgrade_button.set_text(f"Upgrade {cost_text}")
+                self.upgrade_button.draw(surface)
+            else:
+                if self.wave_in_progress:
+                    wave_text = f"Wave {self.next_wave_number - 1} underway"
+                else:
+                    wave_text = f"Next Wave {self.next_wave_number} in {self.wave_timer_remaining:0.1f}s"
+                timer_text = FONT_SMALL.render(wave_text, True, PARCHMENT)
+                timer_rect = timer_text.get_rect(center=(px + pw // 2, self._wave_button_y + 16))
+                surface.blit(timer_text, timer_rect)
 
         # ── Bottom title plate ────────────────────────────────────────────
         title_y = py + ph - 34

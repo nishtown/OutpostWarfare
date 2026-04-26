@@ -62,6 +62,7 @@ class Game:
 
         # ── UI panel ──────────────────────────────────────────────────────
         self.ui = GameUI()
+        self.selected_structure = None
 
         # ── World generation ──────────────────────────────────────────────
         # The generated world is deterministic: the same WORLD_SEED always
@@ -143,15 +144,31 @@ class Game:
         building placement, etc.) are introduced.
         """
         ui_action = self.ui.handle_events(event)
-        if ui_action == "start_next_wave":
-            self.enemy_director.start_next_wave()
+        if ui_action == "upgrade_selected_structure":
+            success, message = self.world_objects.upgrade_structure(self.selected_structure, self.player)
+            if not success:
+                self.ui.announce(message, accent=RED, duration=1.5)
+            self.ui.set_selected_structure(self.selected_structure)
+            return
+        if ui_action == "build_selection_changed":
+            if self.ui.selected_building is not None:
+                self._set_selected_structure(None)
             return
 
         self.player.handle_event(event)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if event.pos[0] < VIEWPORT_WIDTH and self.ui.selected_building:
-                self.try_place_selected_building(event.pos)
+            if event.pos[0] < VIEWPORT_WIDTH:
+                if self.ui.selected_building:
+                    self.try_place_selected_building(event.pos)
+                    return
+
+                clicked_world = self._screen_to_world(event.pos)
+                structure = self.world_objects.find_structure_at_world(clicked_world)
+                if structure is self.selected_structure:
+                    self._set_selected_structure(None)
+                else:
+                    self._set_selected_structure(structure)
 
     # ── Update ────────────────────────────────────────────────────────────────
 
@@ -173,11 +190,19 @@ class Game:
         self.enemy_director.update(dt)
         self.world_objects.update(dt, self.enemy_director.enemies)
 
+        if self.selected_structure is not None and not getattr(self.selected_structure, "alive", False):
+            self._set_selected_structure(None)
+
         self.ui.gold = self.player.get_resource_amount("gold")
         self.ui.food = self.player.get_resource_amount("food")
         self.ui.wood = self.player.get_resource_amount("wood")
         self.ui.stone = self.player.get_resource_amount("stone")
-        self.ui.set_wave_state(self.enemy_director.can_start_next_wave, self.enemy_director.next_wave_number)
+        self.ui.set_selected_structure(self.selected_structure)
+        self.ui.set_wave_state(
+            self.enemy_director.next_wave_number,
+            self.enemy_director.time_until_next_wave,
+            self.enemy_director.wave_in_progress,
+        )
 
         self.ui.update(dt)
         self.camera.update()
@@ -252,14 +277,32 @@ class Game:
                 label_pos = (draw_rect.x, max(0, draw_rect.y - label.get_height() - 2))
                 surface.blit(label, label_pos)
 
+    def _set_selected_structure(self, structure):
+        self.selected_structure = structure
+        self.ui.set_selected_structure(structure)
+
     def _render_world(self, surface, camera, show_labels=False):
         """Render the world into *surface* from the perspective of *camera*."""
         self.world.draw(surface, camera)
         self._draw_landmarks(surface, camera, show_labels=show_labels)
-        self.world_objects.draw(surface, camera)
+        occlusion_target = self.player if getattr(camera, "name", "") == "main" else None
+        self.world_objects.draw(
+            surface,
+            camera,
+            occlusion_target=occlusion_target,
+            selected_structure=self.selected_structure,
+            overlay_pass=False,
+        )
         self.enemy_director.draw(surface, camera)
         self.world_objects.draw_projectiles(surface, camera)
         self.player.draw(surface, camera)
+        self.world_objects.draw(
+            surface,
+            camera,
+            occlusion_target=occlusion_target,
+            selected_structure=self.selected_structure,
+            overlay_pass=True,
+        )
 
         if self.main.debug_mode and show_labels:
             debug_text = FONT_SMALL.render(
