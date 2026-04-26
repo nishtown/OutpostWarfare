@@ -1,0 +1,167 @@
+WORN PATH SYSTEM GUIDE
+======================
+
+This file explains how enemies now wear the terrain into a path over time.
+
+
+1. Core idea
+------------
+
+The path is not a separate solid terrain tile.
+
+Instead, enemies slowly add wear to the tiles they walk across.
+
+The renderer then uses that wear value to paint a patchy dirt overlay on top
+of the existing terrain.
+
+That means the original terrain still matters:
+
+- grass remains visible around the edges
+- the path can look incomplete and walked-in
+- repeated traffic makes the route more obvious over time
+
+
+2. Where the logic lives
+------------------------
+
+enemy.py
+- enemies add wear while they move
+
+world_gen.py
+- each tile stores a wear_level value
+- the renderer draws the patchy worn overlay
+
+
+3. Why wear_level exists
+------------------------
+
+Each TerrainTile now stores wear_level.
+
+This is a float from 0.0 to 1.0.
+
+It represents how much traffic a tile has absorbed.
+
+0.0 means untouched.
+1.0 means fully worn for the current prototype.
+
+
+4. How wear is added
+--------------------
+
+Enemies increase tile wear while they move.
+
+The amount is based on travel distance rather than on simple frame count.
+
+That matters because:
+
+- faster enemies still feel consistent
+- slower machines do not wear the path faster
+- the system depends on actual movement through the world
+
+
+5. Why the overlay is patchy instead of a full tile swap
+--------------------------------------------------------
+
+You explicitly wanted a worn path rather than a hard dirt tile.
+
+The current renderer does that by drawing:
+
+- a center dirt patch
+- soft connectors toward neighboring worn tiles
+- small grassy holes cut back into the dirt overlay
+
+This keeps the path from looking stamped or grid-perfect.
+
+
+6. Neighbor-aware connectors
+----------------------------
+
+The path renderer checks neighboring tiles for wear.
+
+If a neighbor is also worn, the current tile extends a dirt strip toward that
+side.
+
+That helps the path read as one connected foot trail instead of isolated spots.
+
+
+7. Why the terrain type is not replaced
+---------------------------------------
+
+The tile's terrain_key does not change when it becomes worn.
+
+That is intentional.
+
+It keeps the underlying world-generation data stable and avoids corrupting:
+
+- traversability rules
+- terrain transition profiles
+- future autotiling logic
+
+The path is purely a visual layer built on top of existing terrain state.
+
+
+8. Terrain types affected
+-------------------------
+
+The wear overlay currently applies to:
+
+- grass
+- forest
+- sand
+
+It does not apply to blocked terrain such as rock or water.
+
+
+9. Why this is useful beyond appearance
+---------------------------------------
+
+The path is currently visual only, but the stored wear level is useful future
+data.
+
+Possible later uses:
+
+- move-speed bonuses on established paths
+- tower placement restrictions on heavily used lanes
+- AI weighting toward previously worn routes
+- mud / seasonal variants
+- footprints or decals tied to wear strength
+
+
+10. Main extension points
+-------------------------
+
+In world_gen.py:
+
+add_path_wear(...)
+- controls how wear accumulates
+
+_draw_worn_path(...)
+- controls how the patchy dirt actually looks
+
+_neighbor_wear(...)
+- controls connected path behavior between adjacent tiles
+
+
+11. Good future improvements
+----------------------------
+
+1. Slow decay over time if a path is no longer used.
+
+2. Different wear responses by terrain type.
+
+3. More directional brush shapes so curves and corners read even better.
+
+4. Footstep decals layered on top of high-wear tiles.
+
+5. Data-driven path materials once you have proper art.
+
+
+12. Mental model
+----------------
+
+Think of the system as:
+
+enemy movement -> tile wear accumulation -> patchy overlay draw
+
+That separation is what keeps the effect easy to tune without rewriting either
+the enemy AI or the terrain generator.

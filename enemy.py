@@ -49,12 +49,18 @@ class EnemyTier:
     speed: float
     max_health: float
     tint: tuple[int, int, int]
+    attack_damage: float
+    attack_cooldown: float = 0.8
+    attack_range: float = 26.0
+    detour_radius: float = TILE_SIZE * 2.1
+    can_detect_traps: bool = False
 
 
 ENEMY_TIERS = {
-    "scout": EnemyTier("scout", "Scout", speed=78.0, max_health=20.0, tint=(255, 190, 190)),
-    "raider": EnemyTier("raider", "Raider", speed=64.0, max_health=42.0, tint=(255, 155, 155)),
-    "brute": EnemyTier("brute", "Brute", speed=48.0, max_health=90.0, tint=(225, 120, 120)),
+    "scout": EnemyTier("scout", "Scout", speed=78.0, max_health=20.0, tint=(255, 190, 190), attack_damage=5.0, attack_cooldown=0.65, attack_range=22.0, detour_radius=TILE_SIZE * 1.9),
+    "raider": EnemyTier("raider", "Raider", speed=64.0, max_health=42.0, tint=(255, 155, 155), attack_damage=8.0, attack_cooldown=0.8, attack_range=24.0, detour_radius=TILE_SIZE * 2.2),
+    "brute": EnemyTier("brute", "Brute", speed=48.0, max_health=90.0, tint=(225, 120, 120), attack_damage=15.0, attack_cooldown=1.0, attack_range=28.0, detour_radius=TILE_SIZE * 2.0),
+    "sapper": EnemyTier("sapper", "Sapper", speed=58.0, max_health=34.0, tint=(192, 214, 118), attack_damage=9.0, attack_cooldown=0.75, attack_range=24.0, detour_radius=TILE_SIZE * 2.6, can_detect_traps=True),
 }
 
 
@@ -83,6 +89,7 @@ class Enemy(Entity):
         "scout": 3,
         "raider": 4,
         "brute": 5,
+        "sapper": 4,
     }
 
     def __init__(self, main, spawn_point: SpawnPoint, tier_key: str = "scout") -> None:
@@ -115,9 +122,17 @@ class Enemy(Entity):
         self.max_health = tier.max_health
         self.health = tier.max_health
         self.speed = tier.speed
+        self.attack_damage = tier.attack_damage
+        self.attack_cooldown = tier.attack_cooldown
+        self.attack_range = tier.attack_range
+        self.detour_radius = tier.detour_radius
+        self.can_detect_traps = tier.can_detect_traps
 
         self.route_index = 1
         self.reached_base = False
+        self.attack_timer = 0.0
+        self.engagement_target = None
+        self.attack_radius = max(self.collision_size) / 2 + 6
 
     @property
     def current_target(self) -> Vector2 | None:
@@ -126,9 +141,37 @@ class Enemy(Entity):
             return None
         return self.path_points[self.route_index]
 
+    def take_damage(self, amount: float) -> None:
+        self.health -= max(0.0, float(amount))
+        if self.health <= 0.0:
+            self.alive = False
+
     def update(self, dt: float) -> None:
-        """Move toward the next waypoint in the path."""
+        """Move along the path, detour to attack targets, and wear the terrain."""
         if not self.alive:
+            return
+
+        self.attack_timer = max(0.0, self.attack_timer - dt)
+
+        manager = getattr(self.main.game, "world_objects", None)
+        if self.engagement_target is not None and not self._is_target_valid(self.engagement_target):
+            self.engagement_target = None
+
+        if manager is not None and self.engagement_target is None:
+            self.engagement_target = self._choose_engagement_target(manager)
+
+        if self.engagement_target is not None:
+            target_pos = Vector2(self.engagement_target.pos)
+            distance = target_pos.distance_to(self.pos)
+            attack_distance = self.attack_range + getattr(self.engagement_target, "attack_radius", 10)
+
+            if distance <= attack_distance:
+                self._attack_target(self.engagement_target)
+            else:
+                self._move_toward(target_pos, dt, manager)
+
+            self._sync_image()
+            super().update(dt)
             return
 
         target = self.current_target
@@ -136,6 +179,14 @@ class Enemy(Entity):
             self.reached_base = True
             self.alive = False
             return
+
+        if manager is not None:
+            blocker = manager.find_blocking_structure_at_world(target)
+            if blocker is not None:
+                self.engagement_target = blocker
+                self._sync_image()
+                super().update(dt)
+                return
 
         direction = target - self.pos
         distance = direction.length()
@@ -151,14 +202,64 @@ class Enemy(Entity):
             distance = direction.length()
 
         if distance > 0:
-            heading = direction.normalize()
-            step = min(distance, self.speed * dt)
-            self.pos += heading * step
-            self.facing_angle = math.degrees(math.atan2(-heading.y, heading.x))
+            self._move_toward(target, dt, manager)
 
+        self._sync_image()
+        super().update(dt)
+
+    def _move_toward(self, target: Vector2, dt: float, manager) -> None:
+        direction = target - self.pos
+        distance = direction.length()
+        if distance <= 0.001:
+            return
+
+        heading = direction.normalize()
+        step = min(distance, self.speed * dt)
+        next_pos = self.pos + heading * step
+
+        if manager is not None:
+            next_rect = self.get_collision_rect(next_pos)
+            blocker = manager.find_blocking_structure_for_rect(next_rect, ignore=self.engagement_target)
+            if blocker is not None:
+                self.engagement_target = blocker
+                return
+
+        self.pos = next_pos
+        self.facing_angle = math.degrees(math.atan2(-heading.y, heading.x))
+        self.main.game.world.add_path_wear(self.pos.x, self.pos.y, step / max(1.0, self.main.game.world.tile_size * 9.0))
+
+    def _attack_target(self, target) -> None:
+        if self.attack_timer > 0.0:
+            return
+
+        if hasattr(target, "take_damage"):
+            target.take_damage(self.attack_damage)
+        self.attack_timer = self.attack_cooldown
+        if not self._is_target_valid(target):
+            self.engagement_target = None
+
+    def _choose_engagement_target(self, manager):
+        if self.can_detect_traps:
+            trap = manager.find_detectable_trap(self.pos, self.detour_radius)
+            if trap is not None:
+                trap.reveal()
+                return trap
+
+        detour_target = manager.find_enemy_detour_target(self.pos, self.detour_radius)
+        if detour_target is not None:
+            return detour_target
+
+        path_target = self.current_target
+        if path_target is not None:
+            return manager.find_blocking_structure_at_world(path_target)
+        return None
+
+    def _is_target_valid(self, target) -> bool:
+        return target is not None and getattr(target, "alive", False)
+
+    def _sync_image(self) -> None:
         self.image = pygame.transform.rotate(self.original_image, self.facing_angle)
         self.rect = self.image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
-        super().update(dt)
 
     def draw(self, surface: pygame.Surface, camera=None) -> None:
         if camera is not None and getattr(camera, "name", "") == "minimap":
@@ -316,7 +417,8 @@ class EnemyDirector:
         scouts = max(2, 4 + wave_number)
         raiders = max(0, wave_number - 2)
         brutes = max(0, wave_number - 5)
-        queue = (["scout"] * scouts) + (["raider"] * raiders) + (["brute"] * brutes)
+        sappers = max(0, (wave_number - 3) // 2)
+        queue = (["scout"] * scouts) + (["raider"] * raiders) + (["brute"] * brutes) + (["sapper"] * sappers)
         self.rng.shuffle(queue)
         return queue
 

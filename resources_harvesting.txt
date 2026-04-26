@@ -1,0 +1,167 @@
+RESOURCES AND HARVESTING GUIDE
+==============================
+
+This file explains the current harvestable tree and rock system plus how the
+player gathers resources.
+
+
+1. Core idea
+------------
+
+The world now has actual harvestable resource nodes instead of only terrain
+colors and UI counters.
+
+Two node types exist right now:
+
+- trees -> wood
+- rocks -> stone
+
+
+2. Where the logic lives
+------------------------
+
+world_objects.py
+- resource node spawning and storage
+
+player.py
+- timed harvest state machine
+
+game.py
+- converts right-clicks into harvest target selection
+- copies the player's inventory into the UI resource panel each frame
+
+
+3. How resources spawn
+----------------------
+
+Resource nodes are generated when the world-object manager is created.
+
+The current prototype uses two layers:
+
+1. broad random spawning across suitable terrain
+2. guaranteed nodes near the base so early harvesting is always possible
+
+That second rule is important because a prototype is frustrating if the player
+spawns with no reachable resources.
+
+
+4. Why resource nodes are separate from terrain
+-----------------------------------------------
+
+The terrain already tells the game what the world looks like.
+
+Resource nodes are a different gameplay layer.
+
+Keeping them separate means you can later:
+
+- remove or regrow a node without changing terrain generation
+- attach health, loot, or animation data to a node
+- swap primitive art for sprites without rewriting harvesting
+
+
+5. How the player harvests
+--------------------------
+
+The player uses right-click to start harvesting.
+
+The flow is:
+
+1. game.py converts the screen click into world space
+2. the manager finds the best resource node near the click and within harvest range
+3. player.py starts a timed harvest action
+4. when the timer completes, the node returns loot
+5. the player's inventory increases
+
+
+6. Why harvesting is timed instead of instant
+---------------------------------------------
+
+The timed action gives the system room to grow later.
+
+It can support:
+
+- better tools
+- harvest interruption
+- worker automation
+- different harvest speeds by node type
+- visible progress feedback
+
+
+7. Current node behavior
+------------------------
+
+Each resource node stores a remaining yield amount.
+
+Each completed harvest removes a chunk of that yield.
+
+When the remaining amount reaches zero, the node disappears.
+
+
+8. Current node art
+-------------------
+
+Trees and rocks are currently drawn from primitives.
+
+That is intentional for now because you said proper sprites will come later.
+
+The gameplay data and interactions are already in place, so replacing the art
+ later should be cheap.
+
+
+9. How the UI resource panel now works
+--------------------------------------
+
+The resource panel is no longer just decorative data.
+
+Game.update(...) now copies the player's inventory into the UI values each
+frame, so the side panel reflects actual harvested resources.
+
+
+10. Main extension points
+-------------------------
+
+In world_objects.py:
+
+ResourceNodeDefinition
+- resource type data
+
+RESOURCE_DEFINITIONS
+- action durations and yield ranges
+
+WorldObjectManager._spawn_resource_nodes(...)
+- broad spawn behavior
+
+WorldObjectManager._seed_resources_near_base(...)
+- guaranteed early-game nodes
+
+In player.py:
+
+start_harvest(...)
+- harvest action setup
+
+_tick_harvest(...)
+- completion and loot transfer
+
+
+11. Good future improvements
+----------------------------
+
+1. Regrowth or respawn logic.
+
+2. Different tool requirements for different node types.
+
+3. Larger node varieties such as ore veins, berry bushes, or ancient trees.
+
+4. Resource carrying limits and return-to-base loops.
+
+5. Worker units that reuse the same harvest API as the player.
+
+
+12. Mental model
+----------------
+
+Terrain says where resources can exist.
+Resource nodes say what can actually be harvested.
+Player harvesting says when that resource becomes inventory.
+
+Keeping those layers separate is what makes the system extensible.

@@ -37,6 +37,7 @@ from dataclasses import dataclass
 import math
 import pygame
 from settings import *
+from world_objects import BUILD_DEFINITIONS, BUILD_MENU_ORDER
 
 # ── UI palette (medieval stone / parchment) ──────────────────────────────────
 STONE_DARK   = (45,  38,  28)
@@ -56,7 +57,7 @@ _MM_H        = MINIMAP_SURFACE_HEIGHT   # height of the minimap image area
 _MM_LABEL_H  = 18    # vertical space reserved below the minimap for the label
 _SEC_HDR_H   = 26    # height of a section-divider + header row
 _BTN_COLS    = 2     # number of build-button columns
-_BTN_ROWS    = 3     # number of build-button rows  (cols × rows = total buttons)
+_BTN_ROWS    = 4     # number of build-button rows  (cols × rows = total buttons)
 _BTN_GAP     = 5     # pixel gap between adjacent buttons
 _BTN_H       = 72    # height of each BuildingButton
 _RES_PANEL_H = 132   # total height of the resources panel
@@ -393,13 +394,14 @@ class BuildingButton(Button):
     """
 
     _ICON_COLOR = {
-        "town_hall":  (175, 115, 35),
         "barracks":   (120,  35, 35),
         "farm":       ( 55, 135, 35),
         "workshop":   ( 95,  75, 35),
         "market":     (175, 155, 35),
         "lumberyard": ( 55,  95, 35),
-        "stable":     ( 95,  65, 25),
+        "arrow_tower": (135, 100, 58),
+        "wall":       (130, 124, 114),
+        "spike_trap": (110, 90, 58),
     }
 
     def __init__(self, x, y, width, height, text, cost, building_type):
@@ -408,7 +410,7 @@ class BuildingButton(Button):
         self.building_type = building_type
         self.selected      = False
         self.name_surf     = FONT_SMALL.render(text, True, PARCHMENT)
-        self.cost_surf     = FONT_SMALL.render(f"{cost}g", True, GOLD)
+        self.cost_surf     = FONT_SMALL.render(str(cost), True, GOLD)
 
     def draw(self, surface):
         # Background
@@ -461,13 +463,7 @@ class BuildingButton(Button):
         base = pygame.Rect(cx - bw//2, cy - bh//2 + 4, bw, bh)
         t = self.building_type
 
-        if t == "town_hall":
-            pygame.draw.rect(surface, hi, base)
-            tower = pygame.Rect(cx - 5, base.y - 8, 10, 12)
-            pygame.draw.rect(surface, hi, tower)
-            for bx in range(tower.x, tower.right, 3):
-                pygame.draw.rect(surface, hi, (bx, tower.y - 3, 2, 3))
-        elif t == "barracks":
+        if t == "barracks":
             pygame.draw.rect(surface, hi, base)
             pygame.draw.polygon(surface, drk,
                                 [(base.x, base.y), (cx, base.y-8), (base.right, base.y)])
@@ -490,11 +486,18 @@ class BuildingButton(Button):
                 log_r = pygame.Rect(cx-10, cy-2 + ly_off*5, 20, 4)
                 pygame.draw.rect(surface, (110, 70, 25), log_r)
                 pygame.draw.rect(surface, drk, log_r, 1)
-        elif t == "stable":
-            pygame.draw.rect(surface, hi, base)
-            pygame.draw.polygon(surface, drk,
-                                [(base.x, base.y), (cx, base.y-7), (base.right, base.y)])
-            pygame.draw.arc(surface, drk, (cx-4, base.y+2, 8, 10), 0, math.pi, 2)
+        elif t == "arrow_tower":
+            pygame.draw.rect(surface, hi, (cx-7, base.y-8, 14, 18))
+            pygame.draw.rect(surface, drk, (cx-10, base.y-10, 20, 4))
+            pygame.draw.line(surface, GLOW_AMBER, (cx+1, base.y), (cx+11, base.y-8), 2)
+        elif t == "wall":
+            pygame.draw.rect(surface, hi, (base.x, cy-3, base.width, 8))
+            for wx in range(base.x+2, base.right-2, 6):
+                pygame.draw.rect(surface, drk, (wx, cy-7, 4, 4))
+        elif t == "spike_trap":
+            pygame.draw.rect(surface, drk, (cx-10, cy+2, 20, 5))
+            for sx in range(cx-10, cx+8, 5):
+                pygame.draw.polygon(surface, hi, [(sx, cy+2), (sx+2, cy-6), (sx+4, cy+2)])
 
 
 # ── Minimap ───────────────────────────────────────────────────────────────────
@@ -683,12 +686,8 @@ class GameUI:
         btn_w = (inner_w - (_BTN_COLS - 1) * _BTN_GAP) // _BTN_COLS
 
         building_defs = [
-            ("Town Hall",  500, "town_hall"),
-            ("Barracks",   300, "barracks"),
-            ("Farm",       100, "farm"),
-            ("Workshop",   400, "workshop"),
-            ("Market",     250, "market"),
-            ("Lumberyard", 200, "lumberyard"),
+            (BUILD_DEFINITIONS[key].label, BUILD_DEFINITIONS[key].menu_cost, key)
+            for key in BUILD_MENU_ORDER
         ]
         # Build the button grid, filling columns left-to-right, rows top-to-bottom.
         self.build_buttons = []

@@ -1,0 +1,209 @@
+DEFENSES AND RAIDING GUIDE
+==========================
+
+This file explains the new placeable structures, enemy building attacks,
+detours, and wall interactions.
+
+
+1. Core idea
+------------
+
+The game now has a shared world-object layer.
+
+That layer owns:
+
+- buildings
+- walls
+- traps
+- towers
+- resource nodes
+- projectiles
+
+This is important because enemies and the player now interact with the same
+simulation objects instead of separate isolated systems.
+
+
+2. Where the main logic lives
+-----------------------------
+
+world_objects.py
+- owns placeable structures and their updates
+
+game.py
+- forwards placement input
+- updates the world-object manager
+- renders structures and projectiles
+
+enemy.py
+- enemies decide when to detour and attack structures
+
+gameui.py
+- exposes the build menu entries for the new placeables
+
+
+3. Build placement
+------------------
+
+The player can now place structures from the build menu on the main map area.
+
+Placement is tile-snapped.
+
+The current placement rules are:
+
+- the target tile must be traversable terrain
+- it cannot overlap another structure
+- it cannot overlap nearby resource nodes
+- it cannot cover the central base position
+- the player must be able to afford the cost
+
+
+4. Placeable structure types in the current prototype
+-----------------------------------------------------
+
+Farm
+- attackable economy structure
+- enemies may peel off the path to hit it
+
+Lumberyard
+- attackable economy structure
+- slightly higher enemy interest than a farm
+
+Arrow Tower
+- attackable defensive structure
+- shoots at enemies in range
+
+Wall
+- blocks movement
+- enemies attack it when it blocks their advance
+
+Barracks / Workshop / Market
+- generic placeable structures for growth
+- currently function as enemy-attackable buildings
+
+
+5. Why walls are special
+------------------------
+
+Walls are different from normal buildings because they are intended to block
+movement directly.
+
+Enemies do not need to "want" a wall the way they want a farm or tower.
+
+Instead, if a wall blocks the next movement step or occupies the current path
+tile, the enemy switches to attacking that wall.
+
+
+6. Enemy detours
+----------------
+
+Enemies no longer blindly follow the route forever.
+
+Now they can temporarily switch off the path to attack nearby structures that
+have detour value.
+
+This is handled by structure target_priority plus detour_radius.
+
+Higher-value targets are more tempting when close enough.
+
+
+7. How enemies return to the path
+---------------------------------
+
+Enemies do not build a separate permanent route when they detour.
+
+They simply attack the chosen structure and, once that target is gone, they
+resume their normal path-following behavior.
+
+That means the original route still exists as the enemy's default objective.
+
+
+8. Enemy structure attacks
+--------------------------
+
+Each enemy tier now has combat values such as:
+
+- attack_damage
+- attack_cooldown
+- attack_range
+
+When an enemy reaches attack range of a structure, it attacks on a timed loop
+until the structure is destroyed or the target changes.
+
+
+9. Why the attack logic is inside enemy.py
+------------------------------------------
+
+The targeting decision belongs to the enemy because it depends on:
+
+- current path state
+- nearby structures
+- whether the enemy can detect traps
+- whether a blocker is physically in the way
+
+The world-object manager owns the objects themselves, but the enemy owns the
+decision about what to attack next.
+
+
+10. Structure destruction
+-------------------------
+
+Structures have health.
+
+When health reaches zero:
+
+- the structure is removed from the manager
+- the system announces its destruction
+- enemies can then continue moving or retargeting
+
+
+11. Costs and economy link
+--------------------------
+
+Structure placement uses the player's inventory.
+
+That means harvesting and defense-building are now connected systems rather
+than separate prototypes.
+
+If the player cannot afford a structure, placement fails and a message is shown.
+
+
+12. Main extension points
+-------------------------
+
+In world_objects.py:
+
+BuildDefinition
+- add new structure types or rebalance existing ones
+
+BUILD_DEFINITIONS
+- edit costs, health, target value, tower range, and other data
+
+WorldObjectManager.place_structure(...)
+- placement rules
+
+WorldObjectManager.find_enemy_detour_target(...)
+- how enemies choose raid targets
+
+
+13. Good future improvements
+----------------------------
+
+1. Different footprints instead of one-tile structures.
+
+2. Ownership and faction support.
+
+3. Repair, upgrading, and build timers.
+
+4. Better line-of-sight rules for ranged defenses.
+
+5. Path recalculation if a future wall network changes lanes dramatically.
+
+
+14. Mental model
+----------------
+
+Pathing gives enemies their default destination.
+Structures give them optional or forced interruptions.
+
+That split is what creates the new raiding behavior without replacing the whole
+wave-path system.

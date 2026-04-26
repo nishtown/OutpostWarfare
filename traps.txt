@@ -1,0 +1,175 @@
+TRAP SYSTEM GUIDE
+=================
+
+This file explains the current trap prototype and the special trap-detection
+enemy behavior.
+
+
+1. Core idea
+------------
+
+Traps are player-placeable world objects that do not block movement.
+
+Their purpose is to punish enemies that move through them while staying hidden
+from normal enemy decision-making.
+
+
+2. Current trap type
+--------------------
+
+The current prototype trap is the spike trap.
+
+It is:
+
+- placeable from the build menu
+- single-use
+- damaging on trigger
+- hidden to normal enemies as a tactical hazard
+
+
+3. How traps are stored
+-----------------------
+
+Traps are implemented as structures in world_objects.py.
+
+That means they reuse the same shared manager as buildings and towers, but with
+trap-specific data on top:
+
+- is_trap
+- trap_damage
+- armed state
+- hidden_to_enemy
+
+
+4. Why traps are kept inside the structure layer
+------------------------------------------------
+
+This keeps the system simpler because traps still need most of the same things
+as buildings:
+
+- placement rules
+- world position
+- draw logic
+- enemy interaction
+- cleanup when destroyed or consumed
+
+
+5. Trigger behavior
+-------------------
+
+Normal enemies do not actively search for traps.
+
+If a normal enemy crosses the trap trigger zone:
+
+- the enemy takes trap damage
+- the trap is consumed
+- the trap is removed from the world
+
+This keeps the trap useful as ambush damage rather than as a permanent hazard.
+
+
+6. Hidden-to-enemy versus hidden-to-player
+------------------------------------------
+
+"Hidden" here means hidden from enemy logic, not hidden from the player.
+
+The player still gets visual feedback that a trap exists.
+
+This is intentional because you placed the trap and need to be able to manage
+your own defenses.
+
+
+7. Special trap-detection enemy
+-------------------------------
+
+The new special enemy type is the sapper.
+
+The sapper can detect nearby traps.
+
+Instead of walking into them like a normal enemy, the sapper can target the
+trap and destroy it.
+
+
+8. How sapper behavior works
+----------------------------
+
+In enemy.py, the sapper tier sets can_detect_traps=True.
+
+During enemy targeting:
+
+- sappers search for nearby armed traps first
+- if one is found, they reveal it and attack it
+- if not, they behave like other enemies and can still detour to buildings or
+  continue along the path
+
+
+9. Why sapper handling lives in enemy.py
+----------------------------------------
+
+Trap detection is an enemy decision, not a trap decision.
+
+The trap only knows whether it is armed and whether it exists.
+
+The sapper decides:
+
+- whether to care about the trap
+- whether to target it now
+- when to stop targeting it
+
+
+10. Wave integration
+--------------------
+
+Sappers are now included in later waves through the enemy wave queue.
+
+That means the trap system already has a natural counter in the prototype.
+
+
+11. Main extension points
+-------------------------
+
+In world_objects.py:
+
+BuildDefinition for spike_trap
+- trap damage
+- cost
+- hidden state
+
+WorldObjectManager._update_traps(...)
+- trigger logic and trap consumption
+
+In enemy.py:
+
+EnemyTier for sapper
+- combat stats
+- trap-detection ability
+
+Enemy._choose_engagement_target(...)
+- trap prioritization rules
+
+
+12. Good future improvements
+----------------------------
+
+1. Multi-use traps with charges.
+
+2. Different trap types such as fire, snare, poison, or alarm traps.
+
+3. Trap camouflage that depends on terrain type.
+
+4. Sapper-only detection radius upgrades by wave.
+
+5. Trap arming delay, maintenance cost, or repair state.
+
+
+13. Mental model
+----------------
+
+Normal enemy:
+path -> trap trigger -> take damage
+
+Sapper enemy:
+path -> detect trap -> destroy trap -> continue mission
+
+That asymmetry is what makes traps interesting without making them universally
+safe forever.

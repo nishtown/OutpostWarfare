@@ -1,0 +1,149 @@
+ARROW TOWER GUIDE
+=================
+
+This file explains the current arrow tower prototype.
+
+
+1. Core idea
+------------
+
+The arrow tower is the first true offensive defense structure in the new
+placeable system.
+
+It gives the prototype a full loop:
+
+- gather resources
+- place defenses
+- enemies approach
+- the defense attacks them
+
+
+2. Where the logic lives
+------------------------
+
+world_objects.py
+- stores the arrow tower definition
+- updates tower cooldowns
+- selects targets in range
+- spawns arrow projectiles
+- updates projectile movement and damage
+
+gameui.py
+- exposes the arrow tower in the build menu
+
+
+3. How the tower attacks
+------------------------
+
+The tower works on a simple cycle:
+
+1. wait for cooldown
+2. find the nearest living enemy in range
+3. spawn an ArrowProjectile
+4. reset cooldown
+
+
+4. Why projectile objects exist
+-------------------------------
+
+The tower does not apply damage instantly.
+
+Instead it creates a projectile object.
+
+That is useful because it gives you a future path to:
+
+- better visuals
+- miss chances
+- travel-time balancing
+- splash arrows
+- flaming arrows
+- different projectile arcs
+
+
+5. Current projectile behavior
+------------------------------
+
+The current arrow projectile is intentionally simple.
+
+It stores:
+
+- world position
+- target reference
+- speed
+- damage
+
+Each update it moves toward the target.
+When it reaches the target, it applies damage and is removed.
+
+
+6. Why the tower does not aim at buildings or traps
+---------------------------------------------------
+
+The current tower only targets enemies.
+
+That keeps the prototype readable and avoids mixing anti-enemy logic with the
+structure manager's other responsibilities.
+
+
+7. Placement and economy link
+-----------------------------
+
+The arrow tower uses the same placement rules as other structures and consumes
+resources from the player's inventory.
+
+That means it already participates in the same economy/placement flow as walls,
+farms, and traps.
+
+
+8. Enemy interaction
+--------------------
+
+The arrow tower is also an enemy raid target.
+
+Because it has high target priority, enemies near it are more willing to detour
+and attack it.
+
+That keeps it from being a fire-and-forget defense with no risk.
+
+
+9. Main extension points
+------------------------
+
+In world_objects.py:
+
+BuildDefinition for arrow_tower
+- cost
+- health
+- range
+- projectile damage
+- projectile speed
+- cooldown
+
+WorldObjectManager._update_towers(...)
+- target acquisition logic
+
+ArrowProjectile
+- travel and hit behavior
+
+
+10. Good future improvements
+----------------------------
+
+1. Better targeting priorities, such as strongest, nearest, or first-in-lane.
+
+2. Upgrade paths like double-shot or flame arrows.
+
+3. Distinct tower sprites and firing animations.
+
+4. Line-of-sight rules around walls and buildings.
+
+5. Multiple defense structures that reuse the same projectile framework.
+
+
+11. Mental model
+----------------
+
+Arrow tower = structure data + cooldown logic + projectile creation.
+
+That split is what makes it the best starting point for future offensive
+defenses.

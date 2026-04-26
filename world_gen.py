@@ -95,6 +95,7 @@ class TerrainTile:
     traversable: bool
     terrain_profile: TransitionProfile | None = None
     transition_cache: dict[str, TransitionProfile] = field(default_factory=dict)
+    wear_level: float = 0.0
 
 
 class WorldGenerator:
@@ -143,6 +144,19 @@ class WorldGenerator:
         """Return whether the tile under a world-space position can be walked on."""
         tile = self.get_tile_at_world(world_x, world_y)
         return tile is not None and tile.traversable
+
+    def add_path_wear(self, world_x: float, world_y: float, amount: float = 0.04) -> None:
+        """Increase the worn-path level of the traversed tile.
+
+        Wear does not hard-swap terrain to a new tile type. Instead, the draw
+        step uses this scalar to paint irregular dirt patches over grassland so
+        repeated traffic slowly reveals a patchy footpath.
+        """
+        tile = self.get_tile_at_world(world_x, world_y)
+        if tile is None or tile.terrain_key not in {"grass", "forest", "sand"}:
+            return
+
+        tile.wear_level = min(1.0, tile.wear_level + max(0.0, amount))
 
     def find_nearest_traversable(
         self,
@@ -258,6 +272,7 @@ class WorldGenerator:
                 # on-screen to be readable.
                 if draw_rect.width >= 6 and draw_rect.height >= 6:
                     self._draw_transition_overlays(surface, draw_rect, tile, terrain.color)
+                    self._draw_worn_path(surface, draw_rect, tile)
 
         border_rect = camera.world_rect_to_screen(
             pygame.Rect(0, 0, self.world_width, self.world_height)
@@ -523,6 +538,63 @@ class WorldGenerator:
         outline_alpha = max(18, min(78, min(draw_rect.width, draw_rect.height) * 4))
         outline_color = self._blend_color(base_color, DARK_BROWN, outline_alpha)
         pygame.draw.rect(surface, outline_color, draw_rect, 1)
+
+    def _draw_worn_path(self, surface: pygame.Surface, draw_rect: pygame.Rect, tile: TerrainTile) -> None:
+        """Render irregular dirt wear so repeated traffic reads as a path.
+
+        The overlay stays patchy on purpose: the center dirt appears first,
+        connectors extend toward neighboring worn tiles, and small grass holes
+        are carved back out so the result feels walked-in rather than replaced.
+        """
+        if tile.wear_level <= 0.02 or tile.terrain_key not in {"grass", "forest", "sand"}:
+            return
+
+        base_color = self.terrain_types[tile.terrain_key].color
+        wear = tile.wear_level
+        dirt_color = self._blend_color(base_color, (122, 92, 52), 90 + int(110 * wear))
+        overlay = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+        alpha = 46 + int(150 * wear)
+
+        center_w = max(6, int(draw_rect.width * (0.24 + wear * 0.18)))
+        center_h = max(6, int(draw_rect.height * (0.24 + wear * 0.18)))
+        center_rect = pygame.Rect(0, 0, center_w, center_h)
+        center_rect.center = (draw_rect.width // 2, draw_rect.height // 2)
+        pygame.draw.ellipse(overlay, (*dirt_color, alpha), center_rect)
+
+        neighbor_levels = {
+            "north": self._neighbor_wear(tile.grid_x, tile.grid_y - 1),
+            "east": self._neighbor_wear(tile.grid_x + 1, tile.grid_y),
+            "south": self._neighbor_wear(tile.grid_x, tile.grid_y + 1),
+            "west": self._neighbor_wear(tile.grid_x - 1, tile.grid_y),
+        }
+        band = max(3, min(draw_rect.width, draw_rect.height) // 5)
+        connector_alpha = max(28, alpha - 24)
+
+        if neighbor_levels["north"] > 0.08:
+            pygame.draw.rect(overlay, (*dirt_color, connector_alpha), (center_rect.x + band // 2, 0, max(4, center_rect.width - band), center_rect.centery))
+        if neighbor_levels["east"] > 0.08:
+            pygame.draw.rect(overlay, (*dirt_color, connector_alpha), (center_rect.centerx, center_rect.y + band // 2, draw_rect.width - center_rect.centerx, max(4, center_rect.height - band)))
+        if neighbor_levels["south"] > 0.08:
+            pygame.draw.rect(overlay, (*dirt_color, connector_alpha), (center_rect.x + band // 2, center_rect.centery, max(4, center_rect.width - band), draw_rect.height - center_rect.centery))
+        if neighbor_levels["west"] > 0.08:
+            pygame.draw.rect(overlay, (*dirt_color, connector_alpha), (0, center_rect.y + band // 2, center_rect.centerx, max(4, center_rect.height - band)))
+
+        grass_alpha = max(8, 26 - int(14 * wear))
+        for index in range(3):
+            seed = self._hash01(tile.grid_x, tile.grid_y, 701 + index)
+            patch_w = max(2, int(draw_rect.width * (0.12 + seed * 0.08)))
+            patch_h = max(2, int(draw_rect.height * (0.10 + seed * 0.08)))
+            patch_x = int((draw_rect.width - patch_w) * self._hash01(tile.grid_x, tile.grid_y, 715 + index))
+            patch_y = int((draw_rect.height - patch_h) * self._hash01(tile.grid_x, tile.grid_y, 729 + index))
+            pygame.draw.ellipse(overlay, (*base_color, grass_alpha), pygame.Rect(patch_x, patch_y, patch_w, patch_h))
+
+        surface.blit(overlay, draw_rect.topleft)
+
+    def _neighbor_wear(self, grid_x: int, grid_y: int) -> float:
+        tile = self.get_tile(grid_x, grid_y)
+        if tile is None:
+            return 0.0
+        return tile.wear_level
 
     @staticmethod
     def _blend_color(

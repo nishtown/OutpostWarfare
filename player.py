@@ -148,9 +148,9 @@ class Player(Entity):
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 3:   # right mouse – begin harvesting
-                # TODO: ray-cast into the world to find a harvestable target
-                #       within self.harvest_range and call self.start_harvest(target).
-                pass
+                game = getattr(self.main, "game", None)
+                if game is not None:
+                    game.try_start_player_harvest(event.pos)
 
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 3:

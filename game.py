@@ -24,6 +24,7 @@ from enemy import EnemyDirector
 from gameui import GameUI
 from settings import *
 from player import Player
+from world_objects import WorldObjectManager
 from world_gen import WorldGenerator
 
 
@@ -85,6 +86,13 @@ class Game:
 
         # ── Entities ──────────────────────────────────────────────────────
         self.player = Player(self.main, x=self.base_position.x, y=self.base_position.y)
+        self.world_objects = WorldObjectManager(
+            self.main,
+            self.world,
+            self.base_position,
+            WORLD_SEED,
+            announce_callback=self.ui.announce,
+        )
 
         # Experimental enemy wave system. This is deliberately isolated in
         # enemy.py so the whole feature can be removed later by deleting this
@@ -134,8 +142,12 @@ class Game:
         Add further dispatch here as new systems (player input, camera pan,
         building placement, etc.) are introduced.
         """
-        self.player.handle_event(event)
         self.ui.handle_events(event)
+        self.player.handle_event(event)
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if event.pos[0] < VIEWPORT_WIDTH and self.ui.selected_building:
+                self.try_place_selected_building(event.pos)
 
     # ── Update ────────────────────────────────────────────────────────────────
 
@@ -155,6 +167,13 @@ class Game:
         """
         self.player.update(dt)
         self.enemy_director.update(dt)
+        self.world_objects.update(dt, self.enemy_director.enemies)
+
+        self.ui.gold = self.player.get_resource_amount("gold")
+        self.ui.food = self.player.get_resource_amount("food")
+        self.ui.wood = self.player.get_resource_amount("wood")
+        self.ui.stone = self.player.get_resource_amount("stone")
+
         self.ui.update(dt)
         self.camera.update()
         self.minimap_camera.update()
@@ -173,7 +192,44 @@ class Game:
                 return False
             if not self.world.is_traversable_at_world(world_x, world_y):
                 return False
+        if self.world_objects.find_blocking_structure_for_rect(collision_rect) is not None:
+            return False
         return True
+
+    def try_start_player_harvest(self, screen_pos) -> bool:
+        if screen_pos[0] >= VIEWPORT_WIDTH:
+            return False
+
+        clicked_world = self._screen_to_world(screen_pos)
+        target = self.world_objects.find_harvest_target(
+            clicked_world,
+            self.player.pos,
+            self.player.harvest_range,
+        )
+        if target is None:
+            return False
+
+        self.player.start_harvest(target)
+        self.ui.announce(target.action_label.title(), accent=GREEN, duration=1.2)
+        return True
+
+    def try_place_selected_building(self, screen_pos) -> bool:
+        building_key = self.ui.selected_building
+        if building_key is None:
+            return False
+
+        world_pos = self._screen_to_world(screen_pos)
+        success, message = self.world_objects.place_structure(building_key, world_pos, self.player)
+        if not success:
+            self.ui.announce(message, accent=RED, duration=1.4)
+        return success
+
+    def _screen_to_world(self, screen_pos) -> Vector2:
+        screen_x, screen_y = screen_pos
+        return Vector2(
+            self.camera.offset.x + screen_x / self.camera.scale_x,
+            self.camera.offset.y + screen_y / self.camera.scale_y,
+        )
 
     def _draw_landmarks(self, surface, camera, show_labels=False):
         """Draw a few fixed landmarks so camera movement is easy to read."""
@@ -196,7 +252,9 @@ class Game:
         """Render the world into *surface* from the perspective of *camera*."""
         self.world.draw(surface, camera)
         self._draw_landmarks(surface, camera, show_labels=show_labels)
+        self.world_objects.draw(surface, camera)
         self.enemy_director.draw(surface, camera)
+        self.world_objects.draw_projectiles(surface, camera)
         self.player.draw(surface, camera)
 
         if self.main.debug_mode and show_labels:
@@ -206,6 +264,7 @@ class Game:
                     f"wave={self.enemy_director.wave_number}  "
                     f"active={self.enemy_director.active_enemy_count}  "
                     f"queued={len(self.enemy_director.pending_spawns)}  "
+                    f"structures={len(self.world_objects.structures)}  "
                     f"base_hits={self.enemy_director.base_hits}"
                 ),
                 True,
