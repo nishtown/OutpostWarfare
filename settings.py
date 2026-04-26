@@ -53,8 +53,12 @@ VIEWPORT_HEIGHT = SCREEN_HEIGHT                   # 1024 px
 
 # The overall world is larger than the main viewport so the camera has room
 # to move and the minimap can show a broader local region.
-WORLD_WIDTH = VIEWPORT_WIDTH * 3
-WORLD_HEIGHT = VIEWPORT_HEIGHT * 3
+WORLD_WIDTH = VIEWPORT_WIDTH * 8
+WORLD_HEIGHT = VIEWPORT_HEIGHT * 8
+
+# Seed used by world generation. Changing this value gives you a different,
+# but still deterministic, map layout.
+WORLD_SEED = 20260426
 
 # The minimap uses its own camera and its own render surface. Its surface size
 # matches the pixel area reserved for the map inside the UI panel.
@@ -64,7 +68,7 @@ MINIMAP_SURFACE_HEIGHT = 190
 # How much wider the minimap camera's world view is compared to the main view.
 # A value above 1.0 means the minimap shows more area than the player can see
 # in the main camera.
-MINIMAP_VIEW_MULTIPLIER = 1.75
+MINIMAP_VIEW_MULTIPLIER = 2.5
 MINIMAP_VIEW_WIDTH = int(VIEWPORT_WIDTH * MINIMAP_VIEW_MULTIPLIER)
 MINIMAP_VIEW_HEIGHT = int(
     MINIMAP_VIEW_WIDTH * MINIMAP_SURFACE_HEIGHT / MINIMAP_SURFACE_WIDTH

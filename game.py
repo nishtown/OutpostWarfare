@@ -22,6 +22,7 @@ from camera import Camera
 from gameui import GameUI
 from settings import *
 from player import Player
+from world_gen import WorldGenerator
 
 
 class Game:
@@ -59,6 +60,16 @@ class Game:
         # ── UI panel ──────────────────────────────────────────────────────
         self.ui = GameUI()
 
+        # ── World generation ──────────────────────────────────────────────
+        # The generated world is deterministic: the same WORLD_SEED always
+        # produces the same terrain layout.
+        self.world = WorldGenerator(
+            WORLD_WIDTH,
+            WORLD_HEIGHT,
+            tile_size=TILE_SIZE,
+            seed=WORLD_SEED,
+        )
+
         # ── Entities ──────────────────────────────────────────────────────
         self.player = Player(self.main, x=WORLD_WIDTH // 2, y=WORLD_HEIGHT // 2)
 
@@ -82,8 +93,8 @@ class Game:
         self.camera.set_target(self.player)
         self.minimap_camera.set_target(self.player)
 
-        # Static world landmarks make camera motion easier to read while the
-        # project is still in its early gameplay stages.
+        # Static landmarks sit on top of the generated terrain so camera motion
+        # and map readability remain strong while the project is still early.
         self.landmarks = [
             {"name": "North Watch", "rect": pygame.Rect(480, 320, 120, 120), "color": (125, 80, 35)},
             {"name": "Stone Yard", "rect": pygame.Rect(2200, 540, 96, 96), "color": (120, 120, 120)},
@@ -123,38 +134,20 @@ class Game:
         self.minimap_camera.update()
 
     def can_move_player_to(self, collision_rect):
-        """Return True when *collision_rect* stays inside the world bounds."""
-        return (
-            collision_rect.left >= 0
-            and collision_rect.top >= 0
-            and collision_rect.right <= WORLD_WIDTH
-            and collision_rect.bottom <= WORLD_HEIGHT
-        )
+        """Return True when *collision_rect* stays inside walkable world tiles."""
+        corners = [
+            (collision_rect.left, collision_rect.top),
+            (collision_rect.right - 1, collision_rect.top),
+            (collision_rect.left, collision_rect.bottom - 1),
+            (collision_rect.right - 1, collision_rect.bottom - 1),
+        ]
 
-    def _draw_ground(self, surface, camera):
-        """Draw the world background, grid, and outer world border."""
-        surface.fill((20, 80, 30))
-
-        visible = camera.view_rect
-        start_x = max(0, (visible.left // TILE_SIZE) * TILE_SIZE)
-        end_x = min(WORLD_WIDTH, ((visible.right // TILE_SIZE) + 1) * TILE_SIZE)
-        start_y = max(0, (visible.top // TILE_SIZE) * TILE_SIZE)
-        end_y = min(WORLD_HEIGHT, ((visible.bottom // TILE_SIZE) + 1) * TILE_SIZE)
-
-        major_step = TILE_SIZE * 4
-
-        for x in range(start_x, end_x + TILE_SIZE, TILE_SIZE):
-            screen_x = int((x - camera.offset.x) * camera.scale_x)
-            color = (38, 110, 48) if x % major_step == 0 else (30, 96, 40)
-            pygame.draw.line(surface, color, (screen_x, 0), (screen_x, surface.get_height()), 1)
-
-        for y in range(start_y, end_y + TILE_SIZE, TILE_SIZE):
-            screen_y = int((y - camera.offset.y) * camera.scale_y)
-            color = (38, 110, 48) if y % major_step == 0 else (30, 96, 40)
-            pygame.draw.line(surface, color, (0, screen_y), (surface.get_width(), screen_y), 1)
-
-        border_rect = camera.world_rect_to_screen(pygame.Rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT))
-        pygame.draw.rect(surface, (95, 65, 28), border_rect, max(1, int(min(camera.scale_x, camera.scale_y) * 2)))
+        for world_x, world_y in corners:
+            if not (0 <= world_x < WORLD_WIDTH and 0 <= world_y < WORLD_HEIGHT):
+                return False
+            if not self.world.is_traversable_at_world(world_x, world_y):
+                return False
+        return True
 
     def _draw_landmarks(self, surface, camera, show_labels=False):
         """Draw a few fixed landmarks so camera movement is easy to read."""
@@ -175,7 +168,7 @@ class Game:
 
     def _render_world(self, surface, camera, show_labels=False):
         """Render the world into *surface* from the perspective of *camera*."""
-        self._draw_ground(surface, camera)
+        self.world.draw(surface, camera)
         self._draw_landmarks(surface, camera, show_labels=show_labels)
         self.player.draw(surface, camera)
 

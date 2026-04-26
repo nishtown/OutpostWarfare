@@ -1,0 +1,607 @@
+WORLD GENERATION GUIDE
+======================
+
+This file explains the seeded world generation system that was added.
+
+
+1. What the new system does
+---------------------------
+
+The world is now generated from a SEED.
+
+That means:
+
+- the terrain layout is random-looking
+- but it is still deterministic
+- if you use the same seed, you get the same map again
+- if you change the seed, you get a different map
+
+Right now the terrain is rendered with flat colours.
+That is temporary.
+
+The important part is that the generator already stores the extra neighbour
+information needed for future tilesprites:
+
+- terrain type per tile
+- traversable / non-traversable flag
+- edge mask
+- diagonal mask
+- inner corner information
+- outer corner information
+
+So even though it looks simple visually right now, the data layer is already
+set up for proper autotiling later.
+
+
+2. The files involved
+---------------------
+
+settings.py
+- Stores the world size, tile size, and WORLD_SEED.
+
+world_gen.py
+- Contains the generation logic.
+- Contains terrain definitions.
+- Builds the tile grid.
+- Computes terrain transition / edge / corner metadata.
+- Draws the terrain with simple coloured overlays for now.
+
+game.py
+- Creates the WorldGenerator.
+- Uses it in the render pipeline.
+- Uses it for player collision against non-traversable terrain.
+
+
+3. The most important setting: WORLD_SEED
+-----------------------------------------
+
+In settings.py you now have:
+
+    WORLD_SEED = 20260426
+
+If you change that number, the map changes.
+
+Example:
+
+    WORLD_SEED = 1337
+
+Then run the game again and a different terrain layout will be generated.
+
+Important:
+
+- same seed = same map
+- different seed = different map
+
+This is the basic rule for deterministic procedural generation.
+
+
+4. How the world is stored
+--------------------------
+
+The generated world is tile-based.
+
+Each tile is represented by a TerrainTile object in world_gen.py.
+
+Each TerrainTile stores:
+
+grid_x, grid_y
+- the tile coordinates in the grid
+
+terrain_key
+- the terrain type name, such as:
+  - deep_water
+  - water
+  - sand
+  - grass
+  - forest
+  - rock
+
+traversable
+- True if the player can move on it
+- False if it should block movement
+
+terrain_profile
+- transition information relative to the tile's OWN terrain type
+
+transition_cache
+- cached transition data for other terrain lookups like water edges
+
+
+5. The terrain types currently used
+-----------------------------------
+
+These are defined in world_gen.py as TerrainType objects.
+
+Current terrain list:
+
+deep_water
+- colour: dark blue
+- traversable: False
+
+water
+- colour: lighter blue
+- traversable: False
+
+sand
+- colour: pale tan
+- traversable: True
+
+grass
+- colour: green
+- traversable: True
+
+forest
+- colour: darker green
+- traversable: True
+
+rock
+- colour: grey
+- traversable: False
+
+You can expand this list later with new terrain types like:
+
+- swamp
+- road
+- snow
+- lava
+- cliff
+
+
+6. How the terrain is chosen
+----------------------------
+
+The generator does NOT pick each tile with a simple random.choice().
+That would create noisy static instead of natural terrain.
+
+Instead it generates two smooth noise fields:
+
+Elevation
+- controls where land vs water tends to appear
+
+Moisture
+- controls what kind of land appears once the tile is above water
+
+Then the generator maps those values to terrain types.
+
+Current logic in plain language:
+
+- very low elevation  -> deep_water
+- low elevation       -> water
+- slightly above water -> sand
+- high + dry          -> rock
+- moist land          -> forest
+- otherwise           -> grass
+
+This gives you beaches around water, greener areas inland, and some rocky high ground.
+
+
+7. Why the world looks natural instead of random noise
+------------------------------------------------------
+
+world_gen.py uses layered value noise.
+
+That means several smooth random fields are added together at different scales:
+
+- large scale shapes create continents / big regions
+- medium scale shapes add terrain variation
+- small scale shapes add detail
+
+This is similar to the general idea behind Perlin noise or fractal noise,
+but implemented locally in the project using deterministic hash functions.
+
+That has two benefits:
+
+1. no extra runtime dependency is required for generation
+2. the map is fully controlled by your seed
+
+
+8. Why there is a cleanup pass after generation
+-----------------------------------------------
+
+After the first terrain assignment pass, the generator runs a cleanup step.
+
+That step removes tiny single-tile specks when a tile is surrounded by another
+terrain type strongly enough.
+
+Example:
+
+- one lone grass tile in the middle of water
+- one lone rock tile in the middle of sand
+
+If those stay in the map, the world tends to look noisy and ugly.
+
+The cleanup makes the generated shapes read more clearly.
+
+
+9. How traversability works
+---------------------------
+
+The player collision path now checks the generated world.
+
+In game.py:
+
+    can_move_player_to(collision_rect)
+
+This function now checks the four corners of the player's collision rect.
+For each corner it asks the world:
+
+    self.world.is_traversable_at_world(world_x, world_y)
+
+If any corner lands on a non-traversable tile, the move is rejected.
+
+That means:
+
+- water blocks movement
+- deep_water blocks movement
+- rock blocks movement
+- sand, grass, and forest are walkable
+
+This is a simple and strong pattern you can reuse for buildings, NPCs, and pathing.
+
+
+10. The key future-proof part: transition profiles
+--------------------------------------------------
+
+This is the part that matters most for future tilesprites.
+
+The generator can describe the neighbours around a tile relative to a target terrain.
+
+This is done with:
+
+    get_transition_profile(grid_x, grid_y, target_terrain)
+
+Example:
+
+    profile = world.get_transition_profile(x, y, "water")
+
+or:
+
+    profile = world.get_transition_profile(x, y, {"water", "deep_water"})
+
+That second version is useful when you want to treat both water types as one shoreline group.
+
+
+11. What a TransitionProfile contains
+-------------------------------------
+
+A TransitionProfile contains:
+
+target_key
+- what terrain (or terrain group) you asked about
+
+cardinal_mask
+- which of the four direct neighbours match the target
+- north / east / south / west
+
+diagonal_mask
+- which diagonal neighbours match the target
+- north_east / south_east / south_west / north_west
+
+all_mask
+- cardinal + diagonal together
+
+edge_mask
+- which cardinal sides do NOT match
+
+inner_corners
+- concave corners
+- example: north and east match, but north-east diagonal does not
+
+outer_corners
+- convex corners
+- example: north and east do not match, so the tile protrudes into the target terrain
+
+
+12. Why this matters for autotiling
+-----------------------------------
+
+Later, when you replace coloured tiles with sprite tiles, you will need to know:
+
+- Does this tile need a north water edge?
+- Does it need a south-east outer water corner?
+- Does it need a north-west inner sand corner?
+
+That is exactly what the transition profile is for.
+
+Instead of trying to inspect neighbours manually all over the codebase,
+you call one function and use the returned data.
+
+
+13. Inner corners vs outer corners
+----------------------------------
+
+This is one of the most important visual concepts.
+
+Outer corner
+- The current terrain sticks outward into another terrain.
+- Think of land jutting into water.
+
+Inner corner
+- Another terrain bites inward diagonally.
+- Think of water cutting diagonally into land.
+
+If you only render straight edges and ignore corners, terrain transitions look blocky.
+
+Good corner handling is what makes autotiled terrain feel polished.
+
+
+14. Example: sand next to water
+-------------------------------
+
+Suppose you have a sand tile.
+Later you want a tilesprite that changes depending on surrounding water.
+
+You would do something like this:
+
+    profile = world.get_transition_profile(tile_x, tile_y, {"water", "deep_water"})
+
+Then use:
+
+- profile.cardinal_mask to pick north/east/south/west edge variants
+- profile.inner_corners for diagonal bite-ins
+- profile.outer_corners for protruding beach corners
+
+This is the exact data you need for tiles like:
+
+- sand-with-water-edge
+- sand-with-water-inner-corner
+- sand-with-water-outer-corner
+
+
+15. What the renderer does right now
+------------------------------------
+
+The renderer currently draws:
+
+1. the tile base colour
+2. temporary overlay hints for transitions
+3. a thin border between tiles
+
+These overlays are intentionally simple.
+
+Examples:
+
+- shoreline bands on tiles near water
+- corner fills for inner and outer corners
+- darker edge hints where land meets rock
+
+This is not the final art system.
+It is just a way to make the transition metadata visible while you are still using colour blocks.
+
+
+16. The main methods you should understand
+------------------------------------------
+
+WorldGenerator.__init__(...)
+- creates the terrain definitions
+- stores world size and seed
+- generates the world immediately
+
+_generate_world()
+- full generation pipeline
+- terrain assignment
+- cleanup pass
+- build TerrainTile objects
+- compute each tile's own terrain profile
+
+_sample_elevation()
+- generates the elevation noise field
+
+_sample_moisture()
+- generates the moisture noise field
+
+_pick_terrain(elevation, moisture)
+- converts noise values into a terrain key
+
+get_tile(x, y)
+- returns a tile by grid coordinates
+
+get_tile_at_world(world_x, world_y)
+- returns the tile under a world-space position
+
+is_traversable_at_world(world_x, world_y)
+- used by movement/collision logic
+
+get_transition_profile(x, y, target)
+- returns neighbour / edge / corner information for future autotiling
+
+draw(surface, camera)
+- draws only the visible portion of the terrain based on the camera
+
+
+17. How rendering stays efficient
+---------------------------------
+
+The generator does NOT draw every tile in the entire world every frame.
+
+Instead it:
+
+- looks at the camera's visible rectangle
+- calculates the visible tile range
+- draws only those rows and columns
+
+That matters a lot because your world is much bigger than the screen.
+
+So the camera and world generation systems work together:
+
+- camera decides what area is visible
+- world generator draws only that area
+
+
+18. How to add a new terrain type later
+---------------------------------------
+
+Let us say you want to add swamp.
+
+Step 1: add it to self.terrain_types in world_gen.py
+
+Example:
+
+    "swamp": TerrainType("swamp", "Swamp", (70, 95, 55), True, 1.4)
+
+Step 2: update _pick_terrain(...)
+
+Example:
+
+    if elevation > 0.42 and moisture > 0.82:
+        return "swamp"
+
+Step 3: decide whether it is traversable
+
+If swamp is slow but walkable:
+- traversable = True
+- move_cost can be higher
+
+If swamp should block movement entirely:
+- traversable = False
+
+
+19. How to use move_cost later
+------------------------------
+
+move_cost is already part of TerrainType, even though it is not used heavily yet.
+
+That is for future systems like:
+
+- slower movement through forest or swamp
+- pathfinding penalties
+- worker AI preferring roads
+
+Example future use:
+
+    tile = self.world.get_tile_at_world(player.pos.x, player.pos.y)
+    speed_multiplier = 1.0 / tile_terrain.move_cost
+
+
+20. How to regenerate the world with another seed
+-------------------------------------------------
+
+Simple method:
+
+1. change WORLD_SEED in settings.py
+2. run the game again
+
+Possible future improvement:
+
+You could later add a method that rebuilds the world at runtime, for example:
+
+    self.world = WorldGenerator(WORLD_WIDTH, WORLD_HEIGHT, TILE_SIZE, new_seed)
+
+Then re-position the player on a valid spawn tile.
+
+
+21. Good next expansion: proper spawn selection
+-----------------------------------------------
+
+Right now the default spawn is centered in the world.
+For the current seed, that spot is valid and walkable.
+
+Later, a stronger pattern would be:
+
+- find a grass tile near the center
+- or find a safe land tile not touching water
+- spawn there instead of always at exact center
+
+That would make the system more robust for any seed.
+
+
+22. How to apply tilesprites later
+----------------------------------
+
+When you move from colours to actual sprites, the general flow will be:
+
+1. Get the tile's terrain_key
+2. Ask for the transition profile against the terrain you care about
+3. Build a sprite-selection key from the masks and corners
+4. Blit the correct sprite
+
+Example rough idea:
+
+    tile = self.world.get_tile(x, y)
+    if tile.terrain_key == "sand":
+        water_profile = self.world.get_transition_profile(x, y, {"water", "deep_water"})
+        sprite = sand_tileset.pick_sprite(water_profile)
+        surface.blit(sprite, draw_rect)
+
+That is the direction this system is built for.
+
+
+23. Why edge and corner data are better than hardcoding special cases
+---------------------------------------------------------------------
+
+Without a structured transition system, terrain rendering often turns into:
+
+- lots of nested if statements
+- repeated neighbour checks everywhere
+- bugs when corners are forgotten
+
+With the current setup:
+
+- terrain meaning lives in TerrainType
+- tile state lives in TerrainTile
+- neighbour analysis lives in TransitionProfile
+- rendering just consumes that data
+
+That separation makes the system much easier to grow.
+
+
+24. Mental model to keep in your head
+-------------------------------------
+
+Think about the world generation in layers:
+
+Layer 1: noise values
+- elevation
+- moisture
+
+Layer 2: terrain classification
+- water
+- sand
+- grass
+- forest
+- rock
+
+Layer 3: neighbour analysis
+- edges
+- diagonals
+- inner corners
+- outer corners
+
+Layer 4: rendering
+- colour blocks now
+- tilesprites later
+
+If you keep those layers separate in your thinking, the system stays manageable.
+
+
+25. Best next steps for you
+---------------------------
+
+These are the most useful follow-ups:
+
+1. Add a dedicated spawn-finding method
+- safer for any seed
+
+2. Add more terrain types
+- swamp, road, cliff, snow, lava
+
+3. Start replacing the colour renderer with sprite lookup
+- use transition profiles for edge/corner variants
+
+4. Add terrain-based movement cost
+- forest slower than grass
+
+5. Add object spawning based on terrain
+- trees prefer grass/forest
+- rocks prefer rock/sand
+- fish or boats prefer water
+
+
+26. The one line to remember
+----------------------------
+
+If you only remember one line from this system, make it this one:
+
+    world.get_transition_profile(tile_x, tile_y, target_terrain)
+
+That is the bridge between procedural terrain data and future polished terrain sprites.
