@@ -928,10 +928,30 @@ class GameUI:
                     hint_lines.append(
                         f"Range {int(structure.tower_range)}  Damage {int(structure.projectile_damage)}"
                     )
+                    upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - offline"
+                    upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
+                    hint_lines.append(
+                        f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
+                    )
+                elif structure.definition.key == "farm":
+                    ready_plots = sum(1 for plot in getattr(structure, "farm_plots", []) if plot.get("ready_timer", 0.0) > 0.0)
+                    total_plots = len(getattr(structure, "farm_plots", []))
+                    hint_lines.append(f"Food Produced: {structure.food_produced}")
+                    hint_lines.append(f"Plots Ready: {ready_plots}/{total_plots}")
                 elif structure.definition.key == "lumberyard":
                     hint_lines.append(f"Wood Delivered: {structure.wood_delivered}")
-                    hint_lines.append(f"Trees Planted: {structure.trees_planted}")
+                    upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"
+                    upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
+                    hint_lines.append(
+                        f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
+                    )
                 else:
+                    if structure.definition.food_upkeep > 0:
+                        upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"
+                        upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
+                        hint_lines.append(
+                            f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
+                        )
                     hint_lines.append("Click the world to deselect")
 
                 surface.blit(lbl, (px + _PAD + 4, sy + 6))

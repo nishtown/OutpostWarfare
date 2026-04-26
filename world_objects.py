@@ -28,6 +28,7 @@ from settings import DARK_BROWN, FONT_SMALL, GOLD, GREEN, LIGHT_GRAY, ORANGE, RE
 
 
 BUILDING_SPRITE_PATHS = {
+    "farm": ("assets", "buildings", "lumberyard", "4.png"),
     "lumberyard": ("assets", "buildings", "lumberyard", "4.png"),
 }
 WORKER_SPRITE_PATHS = [
@@ -45,6 +46,10 @@ ARROW_TOWER_LEVEL_SHEETS = [
 RESOURCE_TERRAIN_RULES = {
     "tree": {"grass", "forest", "sand"},
     "rock": {"grass", "forest", "sand"},
+    "gold": {"grass", "forest", "sand"},
+}
+STRUCTURE_RENDER_OFFSETS = {
+    "arrow_tower": 24,
 }
 TOWER_UPGRADE_LEVELS = {
     "arrow_tower": (
@@ -92,6 +97,7 @@ class BuildDefinition:
     projectile_damage: float = 0.0
     projectile_speed: float = 0.0
     attack_cooldown: float = 0.0
+    food_upkeep: int = 0
     is_trap: bool = False
     trap_damage: float = 0.0
     hidden_to_enemy: bool = False
@@ -108,12 +114,13 @@ BUILD_DEFINITIONS = {
     ),
     "lumberyard": BuildDefinition(
         "lumberyard", "Lumberyard", {"wood": 32, "stone": 10}, max_health=130.0, color=(97, 74, 44),
-        target_priority=3, detour_radius=TILE_SIZE * 2.4,
+        target_priority=3, detour_radius=TILE_SIZE * 2.4, food_upkeep=1,
     ),
     "arrow_tower": BuildDefinition(
         "arrow_tower", "Arrow Tower", {"wood": 40, "stone": 18}, max_health=150.0, color=(120, 94, 52),
         target_priority=4, detour_radius=TILE_SIZE * 2.8,
         tower_range=TILE_SIZE * 3.7, projectile_damage=14.0, projectile_speed=340.0, attack_cooldown=0.85,
+        food_upkeep=2,
     ),
     "wall": BuildDefinition(
         "wall", "Wall", {"wood": 10, "stone": 20}, max_health=260.0, color=(126, 118, 104),
@@ -125,15 +132,15 @@ BUILD_DEFINITIONS = {
     ),
     "barracks": BuildDefinition(
         "barracks", "Barracks", {"wood": 34, "stone": 14}, max_health=145.0, color=(122, 56, 50),
-        target_priority=2, detour_radius=TILE_SIZE * 2.0,
+        target_priority=2, detour_radius=TILE_SIZE * 2.0, food_upkeep=1,
     ),
     "workshop": BuildDefinition(
         "workshop", "Workshop", {"wood": 26, "stone": 24}, max_health=140.0, color=(126, 108, 54),
-        target_priority=2, detour_radius=TILE_SIZE * 2.0,
+        target_priority=2, detour_radius=TILE_SIZE * 2.0, food_upkeep=1,
     ),
     "market": BuildDefinition(
         "market", "Market", {"wood": 24, "stone": 12}, max_health=125.0, color=(172, 146, 64),
-        target_priority=2, detour_radius=TILE_SIZE * 2.0,
+        target_priority=2, detour_radius=TILE_SIZE * 2.0, food_upkeep=1,
     ),
 }
 
@@ -160,11 +167,13 @@ class ResourceNodeDefinition:
     action_duration: float
     min_yield: int
     max_yield: int
+    growth_duration: float = 0.0
 
 
 RESOURCE_DEFINITIONS = {
-    "tree": ResourceNodeDefinition("tree", "Tree", "wood", "Chopping tree", 2.2, 8, 14),
+    "tree": ResourceNodeDefinition("tree", "Tree", "wood", "Chopping tree", 2.2, 8, 14, growth_duration=18.0),
     "rock": ResourceNodeDefinition("rock", "Rock", "stone", "Mining rock", 2.9, 6, 11),
+    "gold": ResourceNodeDefinition("gold", "Gold Vein", "gold", "Mining gold", 3.4, 12, 20),
 }
 
 RESOURCE_COST_ORDER = ("wood", "stone", "gold", "food")
@@ -199,7 +208,7 @@ def _footprint_for_key(building_key: str) -> tuple[int, int]:
     if building_key == "spike_trap":
         size = int(TILE_SIZE * 0.42)
         return size, size
-    if building_key == "lumberyard":
+    if building_key in {"farm", "lumberyard"}:
         return int(TILE_SIZE * 1.14), int(TILE_SIZE * 0.42)
     if building_key == "arrow_tower":
         return int(TILE_SIZE * 0.54), int(TILE_SIZE * 0.34)
@@ -221,6 +230,18 @@ class Structure(Entity):
     _LUMBERYARD_CHOP_TIME = 2.6
     _LUMBERYARD_DROP_TIME = 0.45
     _LUMBERYARD_PLANT_TIME = 1.2
+    _FOOD_UPKEEP_INTERVAL = 12.0
+    _FOOD_UPKEEP_RETRY_DELAY = 1.0
+    _FARM_GROW_TIME = 24.0
+    _FARM_READY_TIME = 3.0
+    _FARM_FOOD_PER_PLOT = 2
+    _FARM_PLOT_OFFSETS = (
+        Vector2(-70, 22),
+        Vector2(-35, 34),
+        Vector2(0, 40),
+        Vector2(35, 34),
+        Vector2(70, 22),
+    )
 
     def __init__(self, main, definition: BuildDefinition, position: Vector2) -> None:
         image = self._build_surface(definition, level=1)
@@ -237,6 +258,7 @@ class Structure(Entity):
         self.original_image = image
         self.image = image.copy()
         self.collision_size = _footprint_for_key(definition.key)
+        self.sprite_offset_y = STRUCTURE_RENDER_OFFSETS.get(definition.key, 0)
 
         self.max_health = definition.max_health
         self.health = definition.max_health
@@ -253,6 +275,11 @@ class Structure(Entity):
         self.projectile_speed = definition.projectile_speed
         self.attack_cooldown = definition.attack_cooldown
         self.workers = self._create_workers() if definition.key == "lumberyard" else []
+        self.farm_plots = self._create_farm_plots() if definition.key == "farm" else []
+        self.is_operational = True
+        self.food_upkeep_timer = self._FOOD_UPKEEP_INTERVAL
+        self.food_consumed = 0
+        self.food_produced = 0
         self.wood_delivered = 0
         self.trees_planted = 0
         self._apply_level_stats(reset_health=True)
@@ -305,7 +332,12 @@ class Structure(Entity):
 
         self.cooldown_remaining = max(0.0, self.cooldown_remaining - dt)
 
-        if self.definition.key == "lumberyard" and self.workers:
+        self._update_food_upkeep(dt)
+
+        if self.definition.key == "farm" and self.farm_plots:
+            self._update_farm(dt)
+
+        if self.definition.key == "lumberyard" and self.workers and self.is_operational:
             self._update_lumberyard(dt)
 
         super().update(dt)
@@ -316,7 +348,10 @@ class Structure(Entity):
             draw_image = self.image.copy()
             draw_image.set_alpha(150)
 
-        if self.definition.key in {"lumberyard", "arrow_tower"}:
+        if self.definition.key == "farm" and getattr(camera, "name", "") != "minimap":
+            self._draw_farm_growth(surface, camera)
+
+        if self.definition.key in {"farm", "lumberyard", "arrow_tower"}:
             draw_rect = self._sprite_draw_rect(camera)
             if draw_rect.width <= 0 or draw_rect.height <= 0:
                 return
@@ -346,7 +381,7 @@ class Structure(Entity):
 
     def get_sprite_world_rect(self) -> pygame.Rect:
         draw_rect = self.image.get_rect()
-        draw_rect.midbottom = (int(self.pos.x), int(self.pos.y))
+        draw_rect.midbottom = (int(self.pos.x), int(self.pos.y + self.sprite_offset_y))
         return draw_rect
 
     def contains_world_point(self, world_position) -> bool:
@@ -526,6 +561,7 @@ class Structure(Entity):
         }
 
         available_trees = [tree for tree in nearby_trees if tree not in reserved_targets]
+        available_trees = [tree for tree in available_trees if getattr(tree, "is_harvestable", True)]
         if not available_trees:
             return None
 
@@ -616,8 +652,9 @@ class Structure(Entity):
                 pygame.draw.circle(surface, (62, 156, 70), (draw_rect.right - 4, draw_rect.top + 8), 4)
 
     def _sprite_draw_rect(self, camera=None) -> pygame.Rect:
+        draw_anchor = Vector2(self.pos.x, self.pos.y + self.sprite_offset_y)
         if camera is not None and hasattr(camera, "world_to_screen"):
-            screen_pos = camera.world_to_screen(self.pos)
+            screen_pos = camera.world_to_screen(draw_anchor)
             draw_size = (
                 max(1, int(self.image.get_width() * camera.scale_x)),
                 max(1, int(self.image.get_height() * camera.scale_y)),
@@ -627,8 +664,90 @@ class Structure(Entity):
             return draw_rect
 
         draw_rect = self.image.get_rect()
-        draw_rect.midbottom = (int(self.pos.x), int(self.pos.y))
+        draw_rect.midbottom = (int(draw_anchor.x), int(draw_anchor.y))
         return draw_rect
+
+    def _update_food_upkeep(self, dt: float) -> None:
+        if self.definition.food_upkeep <= 0:
+            self.is_operational = True
+            return
+
+        self.food_upkeep_timer -= dt
+        if self.food_upkeep_timer > 0.0:
+            return
+
+        player = self._player()
+        upkeep_cost = {"food": self.definition.food_upkeep}
+        if player is not None and player.consume_resources(upkeep_cost):
+            self.food_upkeep_timer = self._FOOD_UPKEEP_INTERVAL
+            self.food_consumed += self.definition.food_upkeep
+            self.is_operational = True
+            return
+
+        self.food_upkeep_timer = self._FOOD_UPKEEP_RETRY_DELAY
+        self.is_operational = False
+
+    def _create_farm_plots(self) -> list[dict]:
+        return [
+            {
+                "offset": Vector2(offset),
+                "growth": random.uniform(0.15, 0.85),
+                "ready_timer": 0.0,
+            }
+            for offset in self._FARM_PLOT_OFFSETS
+        ]
+
+    def _update_farm(self, dt: float) -> None:
+        player = self._player()
+        if player is None:
+            return
+
+        for plot in self.farm_plots:
+            if plot["ready_timer"] > 0.0:
+                plot["ready_timer"] = max(0.0, plot["ready_timer"] - dt)
+                if plot["ready_timer"] <= 0.0:
+                    player.add_resource("food", self._FARM_FOOD_PER_PLOT)
+                    self.food_produced += self._FARM_FOOD_PER_PLOT
+                    plot["growth"] = 0.0
+                continue
+
+            plot["growth"] = min(1.0, plot["growth"] + dt / self._FARM_GROW_TIME)
+            if plot["growth"] >= 1.0:
+                plot["ready_timer"] = self._FARM_READY_TIME
+
+    def _draw_farm_growth(self, surface: pygame.Surface, camera) -> None:
+        for plot in self.farm_plots:
+            growth = max(0.0, min(1.0, float(plot.get("growth", 0.0))))
+            ready = plot.get("ready_timer", 0.0) > 0.0
+            world_pos = self.pos + plot["offset"]
+
+            if camera is not None and hasattr(camera, "world_to_screen"):
+                screen_pos = camera.world_to_screen(world_pos)
+                scale_x = camera.scale_x
+                scale_y = camera.scale_y
+            else:
+                screen_pos = world_pos
+                scale_x = 1.0
+                scale_y = 1.0
+
+            patch_width = max(10, int(20 * scale_x))
+            patch_height = max(5, int(10 * scale_y))
+            soil_rect = pygame.Rect(0, 0, patch_width, patch_height)
+            soil_rect.midbottom = (int(screen_pos.x), int(screen_pos.y))
+            pygame.draw.ellipse(surface, (101, 69, 36), soil_rect)
+            pygame.draw.ellipse(surface, (66, 44, 22), soil_rect, 1)
+
+            stalk_count = max(1, 2 + int(growth * 4))
+            stem_height = max(4, int((4 + growth * 11) * scale_y))
+            stem_color = (86, 164, 72) if not ready else (176, 164, 70)
+            grain_color = (128, 196, 84) if not ready else (224, 199, 92)
+
+            for stalk_index in range(stalk_count):
+                spread = 0 if stalk_count == 1 else stalk_index / (stalk_count - 1)
+                stem_x = soil_rect.left + int(3 + spread * max(1, soil_rect.width - 6))
+                top_y = soil_rect.top - stem_height
+                pygame.draw.line(surface, stem_color, (stem_x, soil_rect.top + 1), (stem_x, top_y), 2)
+                pygame.draw.circle(surface, grain_color, (stem_x, top_y), max(1, int(2 * scale_x)))
 
     def _draw_selection_outline(self, surface: pygame.Surface, camera) -> None:
         if camera is None or not hasattr(camera, "world_rect_to_screen"):
@@ -792,9 +911,26 @@ class ResourceNode(Entity):
         self.collision_size = (int(TILE_SIZE * 0.5), int(TILE_SIZE * 0.5))
         self.planted_by = planted_by
         self.is_planted = planted_by is not None
+        self.growth_duration = float(definition.growth_duration) if self.is_planted else 0.0
+        self.growth_elapsed = 0.0 if self.growth_duration > 0.0 else self.growth_duration
+
+    @property
+    def growth_ratio(self) -> float:
+        if self.growth_duration <= 0.0:
+            return 1.0
+        return max(0.0, min(1.0, self.growth_elapsed / self.growth_duration))
+
+    @property
+    def is_harvestable(self) -> bool:
+        return self.growth_ratio >= 0.999
+
+    def update(self, dt: float) -> None:
+        if self.growth_duration > 0.0 and self.growth_elapsed < self.growth_duration:
+            self.growth_elapsed = min(self.growth_duration, self.growth_elapsed + dt)
+        super().update(dt)
 
     def harvest(self) -> dict[str, int]:
-        if not self.alive or self.remaining_yield <= 0:
+        if not self.alive or self.remaining_yield <= 0 or not self.is_harvestable:
             return {}
 
         amount = min(2, self.remaining_yield)
@@ -804,7 +940,30 @@ class ResourceNode(Entity):
         return {self.definition.resource_key: amount}
 
     def draw(self, surface: pygame.Surface, camera=None) -> None:
-        super().draw(surface, camera)
+        if self.definition.key == "tree" and self.growth_ratio < 1.0:
+            growth_scale = 0.35 + self.growth_ratio * 0.65
+            draw_image = self.original_image.copy()
+            draw_image.set_alpha(int(110 + self.growth_ratio * 145))
+
+            if camera is not None and hasattr(camera, "world_to_screen"):
+                screen_pos = camera.world_to_screen(self.pos)
+                draw_size = (
+                    max(1, int(draw_image.get_width() * camera.scale_x * growth_scale)),
+                    max(1, int(draw_image.get_height() * camera.scale_y * growth_scale)),
+                )
+                draw_image = pygame.transform.smoothscale(draw_image, draw_size)
+                draw_rect = draw_image.get_rect(midbottom=(int(screen_pos.x), int(screen_pos.y)))
+            else:
+                draw_size = (
+                    max(1, int(draw_image.get_width() * growth_scale)),
+                    max(1, int(draw_image.get_height() * growth_scale)),
+                )
+                draw_image = pygame.transform.smoothscale(draw_image, draw_size)
+                draw_rect = draw_image.get_rect(midbottom=(int(self.pos.x), int(self.pos.y)))
+
+            surface.blit(draw_image, draw_rect)
+        else:
+            super().draw(surface, camera)
 
         if self.main.debug_mode and camera is not None and hasattr(camera, "world_to_screen"):
             screen_pos = camera.world_to_screen(self.pos)
@@ -820,6 +979,11 @@ class ResourceNode(Entity):
             pygame.draw.circle(surface, (42, 132, 56), (17, 23), 10)
             pygame.draw.circle(surface, (34, 116, 49), (27, 19), 11)
             pygame.draw.circle(surface, (60, 150, 74), (24, 28), 8)
+        elif definition.key == "gold":
+            pygame.draw.polygon(surface, (126, 102, 34), [(12, 33), (18, 18), (30, 13), (36, 24), (31, 35), (18, 37)])
+            pygame.draw.polygon(surface, (89, 71, 18), [(12, 33), (18, 18), (30, 13), (36, 24), (31, 35), (18, 37)], 2)
+            pygame.draw.circle(surface, (230, 198, 82), (23, 22), 5)
+            pygame.draw.circle(surface, (255, 232, 118), (26, 20), 3)
         else:
             pygame.draw.polygon(surface, (118, 118, 118), [(12, 33), (18, 18), (30, 13), (36, 24), (31, 35), (18, 37)])
             pygame.draw.polygon(surface, (86, 86, 86), [(12, 33), (18, 18), (30, 13), (36, 24), (31, 35), (18, 37)], 2)
@@ -878,6 +1042,7 @@ class WorldObjectManager:
 
     _TREE_CHANCE = 0.035
     _ROCK_CHANCE = 0.016
+    _GOLD_CHANCE = 0.007
     _MIN_RESOURCE_TILE_SPACING = 2.0
 
     def __init__(self, main, world, base_position, seed: int, announce_callback=None) -> None:
@@ -894,6 +1059,9 @@ class WorldObjectManager:
         self._spawn_resource_nodes()
 
     def update(self, dt: float, enemies) -> None:
+        for node in self.resource_nodes:
+            node.update(dt)
+
         for structure in self.structures:
             structure.update(dt)
 
@@ -994,6 +1162,8 @@ class WorldObjectManager:
         best_score = float("inf")
 
         for node in self.resource_nodes:
+            if not getattr(node, "is_harvestable", True):
+                continue
             clicked_distance = node.pos.distance_to(clicked)
             player_distance = node.pos.distance_to(player)
             if clicked_distance > click_radius or player_distance > max_range:
@@ -1136,7 +1306,12 @@ class WorldObjectManager:
             return
 
         for structure in self.structures:
-            if not structure.alive or structure.tower_range <= 0.0 or structure.cooldown_remaining > 0.0:
+            if (
+                not structure.alive
+                or not getattr(structure, "is_operational", True)
+                or structure.tower_range <= 0.0
+                or structure.cooldown_remaining > 0.0
+            ):
                 continue
 
             candidates = [
@@ -1165,9 +1340,12 @@ class WorldObjectManager:
                     self._try_add_resource_node("tree", (grid_x, grid_y), used_tiles)
                 elif tile.terrain_key in {"sand", "grass"} and self.rng.random() < self._ROCK_CHANCE:
                     self._try_add_resource_node("rock", (grid_x, grid_y), used_tiles)
+                elif tile.terrain_key in {"sand", "grass", "forest"} and self.rng.random() < self._GOLD_CHANCE:
+                    self._try_add_resource_node("gold", (grid_x, grid_y), used_tiles)
 
         self._seed_resources_near_base("tree", used_tiles, target_count=5)
         self._seed_resources_near_base("rock", used_tiles, target_count=3)
+        self._seed_resources_near_base("gold", used_tiles, target_count=2)
 
     def _seed_resources_near_base(self, resource_key: str, used_tiles, target_count: int) -> None:
         base_tile = self._tile_coord(self.base_position)
@@ -1184,6 +1362,8 @@ class WorldObjectManager:
                     if resource_key == "tree" and tile.terrain_key not in {"grass", "forest", "sand"}:
                         continue
                     if resource_key == "rock" and tile.terrain_key not in {"grass", "sand", "forest"}:
+                        continue
+                    if resource_key == "gold" and tile.terrain_key not in {"grass", "sand", "forest"}:
                         continue
                     if self._try_add_resource_node(resource_key, (grid_x, grid_y), used_tiles):
                         seeded += 1

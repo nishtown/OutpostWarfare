@@ -1,0 +1,201 @@
+FOOD, FARMS, GOLD, AND TOWER RENDER OFFSET
+=========================================
+
+Purpose
+-------
+This document explains the economy and presentation pass that added:
+- a downward render offset for arrow tower sprites
+- growth time for planted trees
+- harvestable gold deposits
+- a proper farm structure that grows crops around itself
+- food upkeep that powers structures over time
+
+The goal of this pass is to make the economy more interdependent.
+Towers and production buildings no longer operate forever for free.
+Food now matters, farms are the source of that food, and gold now exists as a
+real world resource instead of only a UI counter.
+
+
+1. Arrow tower render offset
+----------------------------
+Problem:
+The tower art includes transparent space near the front of the sprite, which
+made the visible tower appear too high relative to the ground.
+
+Current solution:
+- arrow towers now draw 24 pixels lower than their collision footprint
+- collision, blocking, and placement stay at the original world position
+- selection and occlusion use the visible sprite rect, so visual interaction
+  still matches what is on screen
+
+Important detail:
+This is only a render offset.
+It does not move the collision rectangle, does not change path blocking, and
+does not change where projectiles originate from in gameplay space.
+
+Implementation area:
+- world_objects.py
+- STRUCTURE_RENDER_OFFSETS
+- Structure._sprite_draw_rect(...)
+- Structure.get_sprite_world_rect(...)
+
+
+2. Trees now take time to grow
+------------------------------
+Problem:
+Lumberyard replanting created fully grown trees immediately, which made the
+replant loop look unnatural and let the wood supply recover too quickly.
+
+Current solution:
+- planted trees begin in an immature state
+- immature trees are visible but smaller and not harvestable
+- each planted tree grows over a timed maturation period
+- once growth finishes, it becomes a normal harvest target
+
+Current behavior:
+- naturally spawned world trees begin fully grown
+- only planted trees use the growth timer
+
+Implementation area:
+- world_objects.py
+- ResourceNodeDefinition.growth_duration
+- ResourceNode.growth_elapsed
+- ResourceNode.is_harvestable
+- ResourceNode.draw(...)
+
+Gameplay impact:
+- replanting still sustains wood income
+- the player cannot instantly convert planted saplings into wood
+- farmed forests now feel like renewable resources rather than instant spawns
+
+
+3. Gold deposits
+----------------
+Problem:
+Gold existed in the resource UI and upgrade costs, but there was no actual
+world source to gather more of it.
+
+Current solution:
+- gold deposits now spawn as a harvestable world resource
+- gold deposits can be gathered with the existing right-click harvest flow
+- additional gold nodes are also seeded near the base so the player is not
+  forced to search the entire map before gold becomes relevant
+
+Implementation area:
+- world_objects.py
+- RESOURCE_DEFINITIONS["gold"]
+- RESOURCE_TERRAIN_RULES["gold"]
+- WorldObjectManager._spawn_resource_nodes(...)
+- WorldObjectManager._seed_resources_near_base(...)
+
+Gameplay impact:
+- gold is now a real economy input
+- higher tower upgrades that cost gold are supported by the world simulation
+
+
+4. Farm building
+----------------
+Requirement:
+The farm uses the same base structure sprite as the lumberyard, but should grow
+farmland around itself.
+
+Current solution:
+- the farm now uses the lumberyard building sprite as its base art
+- the structure draws multiple crop plots around the building footprint
+- crop plots advance through a growth cycle over time
+- when a plot finishes growing, it yields food to the player and restarts its
+  growth cycle
+
+Visual model:
+- the building itself remains the tall central structure
+- crop plots sit lower on the ground around the front area of the farm
+- crop colors shift from greener growing crops to more golden ready crops
+
+Implementation area:
+- world_objects.py
+- BUILDING_SPRITE_PATHS["farm"]
+- Structure._create_farm_plots(...)
+- Structure._update_farm(...)
+- Structure._draw_farm_growth(...)
+
+Gameplay impact:
+- farms now visibly produce something over time
+- food income is no longer abstract; it is tied to visible growth around the
+  structure
+
+
+5. Food upkeep powers structures
+--------------------------------
+Problem:
+Food was tracked in the UI but had no gameplay consequence.
+That made farms optional and left towers permanently free to operate.
+
+Current solution:
+- operational structures now consume food on a fixed interval
+- if the player has enough food, upkeep is paid and the structure stays active
+- if upkeep cannot be paid, the structure becomes inactive until food is
+  available again
+
+Current rules:
+- arrow towers consume food and will stop firing when starved
+- lumberyards and other staffed/functional buildings also consume food over
+  time
+- farms do not consume food, because they are the recovery path for the food
+  economy
+- walls and traps remain exempt because they are not staffed utility buildings
+
+Implementation area:
+- world_objects.py
+- BuildDefinition.food_upkeep
+- Structure._update_food_upkeep(...)
+- WorldObjectManager._update_towers(...)
+
+Why farms are exempt:
+If farms also required food to operate, the player could enter a full deadlock
+state at zero food with no way to recover.
+Leaving farms as the source structure prevents the economy from bricking itself
+while still making food a real limiting factor for expansion.
+
+
+6. Sidebar structure status
+---------------------------
+The right-hand panel now exposes the new economy state when a structure is
+selected.
+
+Current examples:
+- arrow tower shows combat stats plus food upkeep status
+- farm shows produced food total and ready plot count
+- lumberyard shows delivered wood plus food upkeep state
+
+Implementation area:
+- gameui.py
+
+Reason:
+Food-based shutdowns need to be visible to the player, otherwise a tower that
+stops firing would look like a bug instead of a supply problem.
+
+
+7. Mental model for the new economy
+-----------------------------------
+The current intended loop is:
+1. place a farm to establish steady food income
+2. place operational structures such as towers and lumberyards
+3. let those structures spend food over time to stay active
+4. expand farms as the base grows and upkeep increases
+5. harvest gold deposits to support higher-end upgrades
+
+This makes the economy less flat.
+Wood and stone cover construction, gold supports advanced spending, and food now
+acts as the operating budget that keeps the settlement alive.
+
+
+8. Extension points
+-------------------
+Natural follow-up improvements from this version:
+1. add explicit food-upkeep totals for the whole base in the right-hand panel
+2. add farm upgrade levels that increase plot count or growth speed
+3. add distinct gold deposit sprites if dedicated asset art becomes available
+4. add a visible starving or offline badge over inactive structures in the
+   world view
+5. let enemies prioritize farms once food becomes strategically important
+6. add separate crop seasons or terrain bonuses for farm placement
