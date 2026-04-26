@@ -1,0 +1,146 @@
+WAVE CONTROLS AND EARLY ECONOMY
+===============================
+
+Purpose
+-------
+This document explains the wave-control, alert-throttling, and early-economy changes that were added after the enemy-wave, harvesting, and announcement systems were already in place. The goal of this pass was to reduce UI noise, make the build menu clearer, give the player a usable opening economy, and hand wave pacing back to the player.
+
+1. Breach announcement throttling
+---------------------------------
+Previously every breach could push another announcement immediately. When multiple enemies slipped through in a short span, the herald banner could repeat the same message several times and bury more important information.
+
+The announcement feed now supports keyed cooldowns:
+- A gameplay system can send an announcement with a logical key, such as "base_breach".
+- The UI stores the last push time for that key.
+- If the same keyed announcement is pushed again before its cooldown expires, the duplicate is ignored.
+
+Current usage:
+- Base breach alerts use the key "base_breach".
+- Base breach alerts currently use a 6 second cooldown.
+
+Why this is useful:
+- Multiple breach events can still happen in simulation.
+- The player is informed that a breach occurred.
+- The interface stops shouting the same warning every frame.
+
+If you want to tune this later:
+- Lower the cooldown for a more urgent feeling.
+- Raise it for a calmer UI.
+- Reuse keyed cooldowns for other spam-prone alerts such as repeated structure damage or tower warnings.
+
+2. Harvest alerts removed
+-------------------------
+Starting a harvest action no longer creates a herald announcement.
+
+Reason:
+- Resource gathering can happen often.
+- It is a routine player action rather than a high-priority event.
+- Removing it keeps the banner system focused on wave and danger information.
+
+If resource feedback is still desired later, a better approach would be:
+- a small floating label near the player,
+- a subtle resource-panel pulse,
+- or a short sound effect instead of a global announcement.
+
+3. Build menu cost display
+--------------------------
+The build menu previously showed a single summed number for the cost of a structure. That was misleading because it hid which resource types were actually required.
+
+The UI now renders compact multi-resource labels directly from the build definition cost dictionary.
+
+Examples:
+- A pure wood structure can display as: 28W
+- A mixed structure can display as: 40W 18S
+
+Current abbreviations:
+- W = wood
+- S = stone
+- G = gold
+- F = food
+
+Benefits:
+- The player can immediately see which stockpile matters.
+- A mixed-cost structure no longer looks equivalent to a single-resource structure with the same numeric sum.
+- The selected-building strip also shows the same real cost breakdown.
+
+If the UI needs more detail later, the same source cost data can be rendered as:
+- full words,
+- icons,
+- color-coded tokens,
+- or a tooltip panel with exact totals.
+
+4. Starting resources
+---------------------
+The player inventory now starts with a real opening stockpile instead of zero.
+
+Current starting values:
+- Wood: 120
+- Stone: 90
+- Gold: 100
+- Food: 50
+
+Why this was added:
+- It allows immediate building and experimentation.
+- It removes the dead opening where the player had to wait for harvesting before trying the new build systems.
+- The UI resource counters now reflect the actual inventory values rather than decorative placeholder numbers.
+
+Where to change it:
+- The starting-resource dictionary lives in player.py.
+
+If you later want different game modes, this could be moved into:
+- difficulty presets,
+- scenario data,
+- or a save/load configuration file.
+
+5. Manual next-wave control
+---------------------------
+The enemy director no longer auto-starts the next wave as soon as the current one is cleared. Instead, the UI exposes a button that appears when a wave is ready to begin.
+
+Current flow:
+- At the start of the game, the player can manually begin wave 1.
+- While a wave is active, the button is hidden/disabled.
+- When the wave is fully cleared and no pending spawns remain, the next-wave button becomes available again.
+
+Why this matters:
+- The player gets breathing room between waves.
+- Building, repairing, and harvesting can happen deliberately.
+- The pacing feels more RTS-like and less like a forced endless timer.
+
+If you expand this later, the same control point can support:
+- bonus resources for early starts,
+- a countdown preview before a wave launches,
+- or a difficulty modifier tied to when the player chooses to begin.
+
+6. Progressive spawn-point unlocking
+------------------------------------
+Enemy spawn points are now unlocked over time instead of all existing from the start.
+
+Current rule:
+- Start with 1 active spawn point.
+- Add another active spawn point roughly every 10 waves.
+- Continue until the generated spawn-point pool is exhausted.
+
+Implementation details:
+- The director still generates a pool of valid edge spawn points up front.
+- Only the first unlocked subset is treated as active for spawning and drawing.
+- The active count is recalculated when a new wave starts.
+
+Benefits:
+- Early waves are easier to read.
+- Map pressure expands over time.
+- The system still keeps deterministic spawn positions for a given seed.
+
+If you want more dramatic escalation later, alternatives include:
+- unlocking based on elapsed time instead of wave count,
+- unlocking based on player structure count,
+- or choosing newly unlocked points from a weighted threat model instead of a fixed order.
+
+Summary
+-------
+This refinement pass makes the current prototype easier to play and easier to extend:
+- danger alerts are less noisy,
+- normal harvesting stops polluting the banner feed,
+- structure costs are readable,
+- the player begins with useful resources,
+- wave pacing is manual,
+- and enemy pressure expands over time instead of all at once.

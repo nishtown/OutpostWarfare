@@ -118,6 +118,30 @@ RESOURCE_DEFINITIONS = {
     "rock": ResourceNodeDefinition("rock", "Rock", "stone", "Mining rock", 1.55, 6, 11),
 }
 
+RESOURCE_COST_ORDER = ("wood", "stone", "gold", "food")
+RESOURCE_COST_ABBREVIATIONS = {
+    "wood": "W",
+    "stone": "S",
+    "gold": "G",
+    "food": "F",
+}
+
+
+def format_cost_text(cost: dict[str, int], compact: bool = True) -> str:
+    """Return a readable resource cost label for build buttons and status UI."""
+    parts: list[str] = []
+    for resource_key in RESOURCE_COST_ORDER:
+        amount = int(cost.get(resource_key, 0))
+        if amount <= 0:
+            continue
+
+        if compact:
+            parts.append(f"{amount}{RESOURCE_COST_ABBREVIATIONS[resource_key]}")
+        else:
+            parts.append(f"{resource_key.title()} {amount}")
+
+    return " ".join(parts) if parts else "Free"
+
 
 def _footprint_for_key(building_key: str) -> tuple[int, int]:
     if building_key == "wall":

@@ -332,13 +332,20 @@ class EnemyDirector:
         self.base_tile = self._world_to_tile(self.base_position)
         self.rng = random.Random(seed + 701)
 
-        self.spawn_points = self._generate_spawn_points(self._SPAWN_POINT_COUNT)
+        self.spawn_point_pool = self._generate_spawn_points(self._SPAWN_POINT_COUNT)
+        self.spawn_points: list[SpawnPoint] = []
         self.enemies: list[Enemy] = []
         self.base_hits = 0
         self.wave_number = 0
         self.pending_spawns: list[str] = []
         self.spawn_timer = 0.0
-        self.time_until_next_wave = 0.75
+        self.wave_in_progress = False
+        self.can_start_next_wave = True
+        self._refresh_active_spawn_points()
+
+    @property
+    def next_wave_number(self) -> int:
+        return self.wave_number + 1
 
     @property
     def active_enemy_count(self) -> int:
@@ -361,9 +368,15 @@ class EnemyDirector:
         Enemy tier composition gradually gets more dangerous as the wave number
         rises, but the rules are contained here so they are easy to change.
         """
+        if not self.can_start_next_wave or not self.spawn_points:
+            return
+
         self.wave_number += 1
+        self._refresh_active_spawn_points()
         self.pending_spawns = self._build_wave_queue(self.wave_number)
         self.spawn_timer = 0.0
+        self.wave_in_progress = True
+        self.can_start_next_wave = False
         self._announce(f"Wave {self.wave_number} approaching", accent=GOLD, duration=3.2)
 
     def update(self, dt: float) -> None:
@@ -382,7 +395,7 @@ class EnemyDirector:
 
         if breaches_this_frame:
             breach_text = "Base breached" if breaches_this_frame == 1 else f"Base breached x{breaches_this_frame}"
-            self._announce(breach_text, accent=RED, duration=2.4)
+            self._announce(breach_text, accent=RED, duration=2.4, key="base_breach", cooldown=6.0)
 
         if self.pending_spawns and self.spawn_points:
             self.spawn_timer -= dt
@@ -390,11 +403,9 @@ class EnemyDirector:
                 tier_key = self.pending_spawns.pop(0)
                 self.spawn_enemy(tier_key)
                 self.spawn_timer += self._SPAWN_INTERVAL
-        elif not self.enemies:
-            self.time_until_next_wave -= dt
-            if self.time_until_next_wave <= 0.0:
-                self.start_next_wave()
-                self.time_until_next_wave = self._WAVE_COOLDOWN
+        elif self.wave_in_progress and not self.enemies:
+            self.wave_in_progress = False
+            self.can_start_next_wave = True
 
     def draw(self, surface: pygame.Surface, camera) -> None:
         self._draw_spawn_points(surface, camera)
@@ -404,9 +415,9 @@ class EnemyDirector:
         for enemy in self.enemies:
             enemy.draw(surface, camera)
 
-    def _announce(self, text: str, accent=GOLD, duration: float = 3.0) -> None:
+    def _announce(self, text: str, accent=GOLD, duration: float = 3.0, key=None, cooldown: float = 0.0) -> None:
         if callable(self.announce_callback):
-            self.announce_callback(text, accent=accent, duration=duration)
+            self.announce_callback(text, accent=accent, duration=duration, key=key, cooldown=cooldown)
 
     def _build_wave_queue(self, wave_number: int) -> list[str]:
         """Return the enemy tiers for a wave.
@@ -421,6 +432,14 @@ class EnemyDirector:
         queue = (["scout"] * scouts) + (["raider"] * raiders) + (["brute"] * brutes) + (["sapper"] * sappers)
         self.rng.shuffle(queue)
         return queue
+
+    def _refresh_active_spawn_points(self) -> None:
+        if not self.spawn_point_pool:
+            self.spawn_points = []
+            return
+
+        unlocked_count = min(len(self.spawn_point_pool), 1 + (self.wave_number // 10))
+        self.spawn_points = list(self.spawn_point_pool[:unlocked_count])
 
     def _generate_spawn_points(self, count: int) -> list[SpawnPoint]:
         candidates = self._collect_edge_candidates()

@@ -142,7 +142,11 @@ class Game:
         Add further dispatch here as new systems (player input, camera pan,
         building placement, etc.) are introduced.
         """
-        self.ui.handle_events(event)
+        ui_action = self.ui.handle_events(event)
+        if ui_action == "start_next_wave":
+            self.enemy_director.start_next_wave()
+            return
+
         self.player.handle_event(event)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -173,6 +177,7 @@ class Game:
         self.ui.food = self.player.get_resource_amount("food")
         self.ui.wood = self.player.get_resource_amount("wood")
         self.ui.stone = self.player.get_resource_amount("stone")
+        self.ui.set_wave_state(self.enemy_director.can_start_next_wave, self.enemy_director.next_wave_number)
 
         self.ui.update(dt)
         self.camera.update()
@@ -210,7 +215,6 @@ class Game:
             return False
 
         self.player.start_harvest(target)
-        self.ui.announce(target.action_label.title(), accent=GREEN, duration=1.2)
         return True
 
     def try_place_selected_building(self, screen_pos) -> bool:

@@ -37,7 +37,7 @@ from dataclasses import dataclass
 import math
 import pygame
 from settings import *
-from world_objects import BUILD_DEFINITIONS, BUILD_MENU_ORDER
+from world_objects import BUILD_DEFINITIONS, BUILD_MENU_ORDER, format_cost_text
 
 # ── UI palette (medieval stone / parchment) ──────────────────────────────────
 STONE_DARK   = (45,  38,  28)
@@ -70,6 +70,7 @@ class Announcement:
     text: str
     accent: tuple[int, int, int]
     duration: float
+    key: str | None = None
 
 
 class AnnouncementFeed:
@@ -92,14 +93,24 @@ class AnnouncementFeed:
         self.current: Announcement | None = None
         self.time_remaining = 0.0
         self.elapsed = 0.0
+        self.current_time = 0.0
+        self.last_push_times: dict[str, float] = {}
 
-    def push(self, text, accent=GOLD, duration=3.0):
-        announcement = Announcement(text=text, accent=accent, duration=max(0.8, duration))
+    def push(self, text, accent=GOLD, duration=3.0, key=None, cooldown=0.0):
+        if key is not None and cooldown > 0.0:
+            last_time = self.last_push_times.get(key, float("-inf"))
+            if self.current_time - last_time < cooldown:
+                return False
+            self.last_push_times[key] = self.current_time
+
+        announcement = Announcement(text=text, accent=accent, duration=max(0.8, duration), key=key)
         self.queue.append(announcement)
         if self.current is None:
             self._advance()
+        return True
 
     def update(self, dt):
+        self.current_time += dt
         if self.current is None:
             if self.queue:
                 self._advance()
@@ -357,10 +368,16 @@ class Button(UIElement):
     def __init__(self, x, y, width, height, text,
                  color=STONE_MID, hover_color=STONE_LIGHT):
         super().__init__(x, y, width, height, color)
-        self.text        = text
+        self.text        = ""
         self.hover_color = hover_color
-        self.text_surf   = FONT_MEDIUM.render(text, True, PARCHMENT)
-        self.text_rect   = self.text_surf.get_rect(center=self.rect.center)
+        self.text_surf   = None
+        self.text_rect   = None
+        self.set_text(text)
+
+    def set_text(self, text):
+        self.text = text
+        self.text_surf = FONT_MEDIUM.render(text, True, PARCHMENT)
+        self.text_rect = self.text_surf.get_rect(center=self.rect.center)
 
     def draw(self, surface):
         col = self.hover_color if self.hovered else self.color
@@ -404,13 +421,13 @@ class BuildingButton(Button):
         "spike_trap": (110, 90, 58),
     }
 
-    def __init__(self, x, y, width, height, text, cost, building_type):
+    def __init__(self, x, y, width, height, text, cost_text, building_type):
         super().__init__(x, y, width, height, text)
-        self.cost          = cost
+        self.cost_text     = cost_text
         self.building_type = building_type
         self.selected      = False
         self.name_surf     = FONT_SMALL.render(text, True, PARCHMENT)
-        self.cost_surf     = FONT_SMALL.render(str(cost), True, GOLD)
+        self.cost_surf     = FONT_SMALL.render(cost_text, True, GOLD)
 
     def draw(self, surface):
         # Background
@@ -686,7 +703,7 @@ class GameUI:
         btn_w = (inner_w - (_BTN_COLS - 1) * _BTN_GAP) // _BTN_COLS
 
         building_defs = [
-            (BUILD_DEFINITIONS[key].label, BUILD_DEFINITIONS[key].menu_cost, key)
+            (BUILD_DEFINITIONS[key].label, format_cost_text(BUILD_DEFINITIONS[key].cost), key)
             for key in BUILD_MENU_ORDER
         ]
         # Build the button grid, filling columns left-to-right, rows top-to-bottom.
@@ -710,20 +727,24 @@ class GameUI:
 
         # Current resource totals.  Write to these attributes each frame
         # (or whenever the economy ticks) to keep the display up to date.
-        self.gold  = 1500
-        self.food  =  800
-        self.wood  =  600
-        self.stone =  400
+        self.gold  = 0
+        self.food  = 0
+        self.wood  = 0
+        self.stone = 0
 
         # The building type string that is queued for placement, or None.
         self.selected_building = None
 
         # y coordinate where the selected-building status strip starts.
         self._status_y = self._res_top + _RES_PANEL_H + 8
+        self._wave_button_y = self._status_y + 66
 
         # Announcements are drawn above the main viewport rather than inside
         # the side panel so important events stay visible during play.
         self.announcements = AnnouncementFeed(pygame.Rect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT))
+        self.wave_button = Button(px + _PAD, self._wave_button_y, inner_w, 36, "Start Wave 1")
+        self.can_start_wave = True
+        self.next_wave_number = 1
 
     # ── Events ───────────────────────────────────────────────────────────────
 
@@ -737,8 +758,12 @@ class GameUI:
             # Update hover flag on each button based on the new cursor position.
             for btn in self.build_buttons:
                 btn.hovered = btn.is_hovered(event.pos)
+            self.wave_button.hovered = self.can_start_wave and self.wave_button.is_hovered(event.pos)
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
+            if self.can_start_wave and self.wave_button.is_hovered(event.pos):
+                return "start_next_wave"
+
             # Left-click selects the hovered building and deselects all others.
             for btn in self.build_buttons:
                 if btn.hovered:
@@ -750,13 +775,20 @@ class GameUI:
                     print(f"Selected building: {btn.building_type}")
                     break
 
+        return None
+
     def update(self, dt):
         """Advance transient UI state such as queued announcements."""
         self.announcements.update(dt)
 
-    def announce(self, text, accent=GOLD, duration=3.0):
+    def announce(self, text, accent=GOLD, duration=3.0, key=None, cooldown=0.0):
         """Queue a banner announcement for the player."""
-        self.announcements.push(text, accent=accent, duration=duration)
+        self.announcements.push(text, accent=accent, duration=duration, key=key, cooldown=cooldown)
+
+    def set_wave_state(self, can_start_wave, next_wave_number):
+        self.can_start_wave = bool(can_start_wave)
+        self.next_wave_number = int(next_wave_number)
+        self.wave_button.set_text(f"Start Wave {self.next_wave_number}")
 
     # ── Draw ─────────────────────────────────────────────────────────────────
 
@@ -864,15 +896,20 @@ class GameUI:
         # ── Selected building status strip ────────────────────────────────
         # Only rendered if there is vertical space between here and the footer.
         sy = self._status_y
-        if sy + 50 < py + ph - 40:
+        if sy + 92 < py + ph - 40:
             _divider(surface, px + _PAD, sy, inner_w)
             if self.selected_building:
                 # Convert snake_case building type to a Title Case display name.
                 name_txt = self.selected_building.replace("_", " ").title()
                 lbl  = FONT_MEDIUM.render(name_txt, True, GOLD)
-                hint = FONT_SMALL.render("Click map to place", True, PARCHMENT_DK)
+                cost_text = format_cost_text(BUILD_DEFINITIONS[self.selected_building].cost)
+                hint = FONT_SMALL.render(f"Cost: {cost_text}", True, PARCHMENT_DK)
                 surface.blit(lbl,  (px + _PAD + 4, sy + 6))
                 surface.blit(hint, (px + _PAD + 4, sy + 6 + lbl.get_height() + 2))
+
+        if self.can_start_wave and self._wave_button_y + self.wave_button.rect.height < py + ph - 42:
+            _divider(surface, px + _PAD, self._wave_button_y - 10, inner_w)
+            self.wave_button.draw(surface)
 
         # ── Bottom title plate ────────────────────────────────────────────
         title_y = py + ph - 34

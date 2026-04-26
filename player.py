@@ -43,6 +43,14 @@ from settings import *
 from entity import Entity
 
 
+STARTING_RESOURCES = {
+    "wood": 120,
+    "stone": 90,
+    "gold": 100,
+    "food": 50,
+}
+
+
 class Player(Entity):
     """The human-controlled character.
 
@@ -117,12 +125,7 @@ class Player(Entity):
         # ── Inventory ─────────────────────────────────────────────────────
         # Initialise all known resource keys to 0 so callers can always use
         # integer arithmetic without checking for key existence.
-        self.inventory: dict[str, int] = {
-            "wood":  0,
-            "stone": 0,
-            "gold":  0,
-            "food":  0,
-        }
+        self.inventory: dict[str, int] = dict(STARTING_RESOURCES)
 
         # ── Harvest action ────────────────────────────────────────────────
         # Only one harvest can be active at a time.  Moving cancels it.
