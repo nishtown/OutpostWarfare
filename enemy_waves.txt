@@ -1,0 +1,457 @@
+ENEMY WAVE SYSTEM GUIDE
+=======================
+
+This file explains the current enemy wave system in detail.
+
+This version replaces the older checkpoint / pseudo-maze idea.
+
+The new idea is:
+
+- enemy spawn points exist near the edge of the map
+- enemies spawn from those edge points in waves
+- enemies path toward the central base
+- natural terrain obstacles still matter because pathing is based on the world tile grid
+
+This is a better fit for a tower defence structure because it is simpler,
+more readable, and easier to expand or remove later.
+
+
+1. The files involved
+---------------------
+
+enemy.py
+- contains the entire wave spawn prototype
+- this is the main file to edit if you want to change the behaviour
+
+game.py
+- creates the central base position
+- creates the EnemyDirector
+- updates and draws it
+
+world_gen.py
+- provides terrain traversability
+- provides helper methods used by spawn generation and pathfinding
+
+
+2. Why the system is easy to remove
+-----------------------------------
+
+This was a design requirement.
+
+Almost all of the wave-spawn logic is isolated in enemy.py.
+
+The integration into game.py is intentionally small:
+
+- one import
+- one EnemyDirector instance
+- one update call
+- one draw call
+
+That means if you later decide this approach is wrong, it is easy to delete
+or replace without rewriting the rest of the game.
+
+
+3. Core idea
+------------
+
+The system has three main concepts:
+
+EnemyTier
+- defines how strong or fast an enemy type is
+
+SpawnPoint
+- a point near the edge of the map
+- stores a valid path to the base
+
+EnemyDirector
+- owns the spawn points
+- creates waves
+- spawns enemies over time
+- updates and draws active enemies
+
+
+4. Base position
+----------------
+
+The base is located near the middle of the map.
+
+In game.py it is not placed at the exact center blindly.
+Instead it is snapped to the nearest traversable tile.
+
+That matters because the exact center of a future seed might land on:
+
+- water
+- deep water
+- rock
+
+If that happened and you did not snap it, the base could end up in a bad tile.
+
+
+5. Spawn points
+---------------
+
+Spawn points are generated near the map edge.
+
+The generator looks around the perimeter of the map and searches for tiles
+that are close to the edge but still traversable.
+
+Important details:
+
+- spawn points are snapped onto valid traversable terrain
+- spawn points are spaced apart so they are not all clustered together
+- each spawn point must have a valid path to the base
+
+If a candidate edge point cannot reach the base through walkable tiles,
+it is rejected.
+
+
+6. Why spawn points store paths in advance
+------------------------------------------
+
+Each spawn point stores a path to the base in advance.
+
+That means pathfinding happens when the spawn point is created, not every frame.
+
+This has two advantages:
+
+1. enemies are cheap to spawn because they can reuse the stored path
+2. the wave system stays simpler because each spawn point already knows how to reach the center
+
+
+7. Pathfinding
+--------------
+
+The system currently uses A* pathfinding on the terrain tile grid.
+
+Important points:
+
+- pathfinding is tile-based, not free-form
+- only traversable tiles can be used
+- the path uses 4-direction movement (up, down, left, right)
+- terrain move_cost is used in the path score
+
+That means:
+
+- water is avoided because it is not traversable
+- rock is avoided because it is not traversable
+- future slower terrain types can affect routing by increasing move_cost
+
+
+8. Why this works better with natural obstacles
+-----------------------------------------------
+
+You said the map can always have natural obstacles.
+
+That makes straight-line movement unreliable because enemies would:
+
+- walk into water
+- hit rocks
+- get stuck on blocked terrain
+
+By pathing on the tile grid instead, enemies find a usable route around those
+terrain features while still feeling grounded in the world generation.
+
+
+9. The current enemy flow
+-------------------------
+
+The lifecycle is:
+
+1. Game creates EnemyDirector
+2. EnemyDirector generates edge spawn points
+3. EnemyDirector waits for the next wave timer
+4. A wave is created as a queue of enemy tiers
+5. Enemies are spawned from edge points over time
+6. Each enemy follows its stored path toward the base
+7. If an enemy reaches the base, base_hits increases
+
+
+10. Wave behaviour
+------------------
+
+The wave system is intentionally simple right now.
+
+It uses these ideas:
+
+- waves are numbered: 1, 2, 3, ...
+- each new wave queues more enemies
+- higher waves gradually include worse enemy tiers
+
+Current behaviour in plain language:
+
+- early waves are mostly scouts
+- mid waves begin to add raiders
+- later waves begin to add brutes
+
+Enemies are not spawned all at once.
+They are spawned one after another using a spawn interval.
+
+That is important because it creates a proper tower-defence wave feel.
+
+
+11. Enemy tiers
+---------------
+
+Enemy tiers are defined in enemy.py as ENEMY_TIERS.
+
+Right now there are three:
+
+scout
+- fastest
+- weakest
+
+raider
+- medium speed
+- medium health
+
+brute
+- slowest
+- highest health
+
+All three currently use the same base sprite as the player, tinted differently.
+
+That keeps the visual prototype simple while still allowing gameplay variation.
+
+
+12. How enemies move
+--------------------
+
+Each enemy stores:
+
+- its spawn point
+- its tier
+- a list of path points
+- the index of the next target point
+
+Each update:
+
+- the enemy looks at its next path point
+- it moves toward that point
+- once close enough, it advances to the next one
+- when there are no more points left, it has reached the base
+
+This is much easier to reason about than free movement with ad hoc collision checks.
+
+
+13. Drawing
+-----------
+
+The enemy system draws three kinds of things:
+
+spawn points
+- shown near the edge of the map
+
+base marker
+- shown near the center of the map
+
+enemies
+- the moving units themselves
+
+In debug mode, the system also draws the stored paths from the spawn points
+to the base.
+
+That makes it much easier to inspect whether the pathing logic is doing
+something sensible.
+
+
+14. The most important functions to edit
+----------------------------------------
+
+If you want to tune this system later, these are the main places to look.
+
+EnemyDirector._generate_spawn_points(...)
+- controls how many spawn points are created
+- controls how they are selected from the map edge
+
+EnemyDirector._collect_edge_candidates(...)
+- controls which edge-adjacent positions are considered as spawn candidates
+
+EnemyDirector._find_tile_path(...)
+- contains the A* pathfinding
+
+EnemyDirector._build_wave_queue(...)
+- controls wave composition
+- this is where enemy tier scaling is decided
+
+EnemyDirector.spawn_enemy(...)
+- controls how a queued enemy becomes a live entity
+
+
+15. Constants you will probably tweak first
+------------------------------------------
+
+In enemy.py:
+
+_SPAWN_POINT_COUNT
+- how many edge spawn points you want
+
+_SPAWN_INTERVAL
+- time between enemy spawns in a wave
+
+_WAVE_COOLDOWN
+- delay between waves
+
+_MIN_SPAWN_TILE_SPACING
+- how far apart edge spawn points should be
+
+These are good values to experiment with early.
+
+
+16. How to make waves harder or easier
+--------------------------------------
+
+Edit EnemyDirector._build_wave_queue(wave_number).
+
+That function currently returns a list of tier keys.
+
+Example idea:
+
+- easier waves: more scouts, fewer raiders/brutes
+- harder waves: increase raiders earlier, add brutes sooner
+
+You can also change the total number of enemies per wave there.
+
+
+17. How to add a new enemy tier
+-------------------------------
+
+Step 1: add a new EnemyTier entry to ENEMY_TIERS.
+
+Example:
+
+    "tank": EnemyTier("tank", "Tank", speed=32.0, max_health=180.0, tint=(180, 90, 90))
+
+Step 2: update _build_wave_queue(...) so the new tier starts appearing at the
+wave number you want.
+
+That is enough for the prototype to start spawning the new tier.
+
+
+18. How to make spawn points more controlled
+--------------------------------------------
+
+Right now spawn points are chosen from edge candidates and spaced apart.
+
+Later you might want to change that to something more structured, such as:
+
+- fixed north / south / east / west entrances
+- only two spawn lanes
+- spawn points tied to special terrain like roads
+
+If you want that, the place to change is:
+
+EnemyDirector._collect_edge_candidates(...)
+
+
+19. How to change the base behaviour
+------------------------------------
+
+Right now the base is just a position marker near the center of the world.
+
+Enemies reaching it increment base_hits.
+
+Later you might replace that with:
+
+- a real Base entity
+- health points
+- building / defense radius
+- upgrade system
+
+That change should mostly happen in game.py plus a new Base class, not inside
+the spawn-point or pathfinding logic.
+
+
+20. How to remove this system later if you do not want it
+---------------------------------------------------------
+
+This is intentionally easy.
+
+To remove the system:
+
+1. delete enemy.py
+2. remove the EnemyDirector import from game.py
+3. remove self.enemy_director creation from game.py
+4. remove the update call in Game.update(...)
+5. remove the draw call in Game._render_world(...)
+
+That is why the feature was kept isolated.
+
+
+21. Why this is better than the checkpoint version
+--------------------------------------------------
+
+The old idea made the route feel a bit artificial because the maze path was
+manufactured by extra checkpoint logic around the center.
+
+The new version is cleaner because:
+
+- the map itself already provides obstacle variety
+- enemies enter from logical edge points
+- pathing to the center is easier to understand
+- the system matches tower-defence conventions more closely
+
+
+22. Known limitations of the current prototype
+----------------------------------------------
+
+This system is still a prototype.
+
+Current limitations:
+
+- enemies reuse the player sprite
+- spawn points are precomputed once and do not react to world changes
+- pathfinding is computed once per spawn point, not dynamically
+- enemies do not re-path if a future tower or wall blocks their route
+- the base is just a marker, not a full gameplay object yet
+
+These are expected limitations for this stage.
+
+
+23. Strong future extension points
+----------------------------------
+
+These are good next steps if you keep this approach.
+
+1. Dynamic re-pathing
+- if towers or walls are built, enemies should recalculate paths
+
+2. Real base entity
+- health, damage handling, UI, destruction state
+
+3. Wave definitions as data
+- move wave settings out of code and into JSON or a config file
+
+4. Different enemy behaviours
+- flying enemies that ignore terrain
+- tunneling enemies that ignore some obstacles
+- elite enemies that choose special spawn points
+
+5. Spawn point ownership
+- different enemy factions could prefer different spawn edges
+
+
+24. Mental model to keep
+------------------------
+
+Think about the system in layers:
+
+Layer 1: world terrain
+- generated by world_gen.py
+- decides what is traversable
+
+Layer 2: base position
+- fixed near the center on valid terrain
+
+Layer 3: spawn points
+- generated near the edges on valid terrain
+
+Layer 4: pathfinding
+- computes how to get from each spawn point to the base
+
+Layer 5: waves
+- decides how many enemies appear and of what type
+
+Layer 6: active enemies
+- each one follows a path toward the base
+
+If you keep those layers separate in your head, the system stays much easier to modify.

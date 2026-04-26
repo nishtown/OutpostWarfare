@@ -73,15 +73,20 @@ class Game:
         )
 
         # ── Base anchor ──────────────────────────────────────────────────
-        # The route prototype uses a fixed base in the middle of the world.
-        # The player currently starts here as well, but the player can move
-        # away while enemies continue targeting this static position.
-        self.base_position = Vector2(WORLD_WIDTH / 2, WORLD_HEIGHT / 2)
+        # The tower-defence prototype uses a fixed base near the middle of the
+        # map. We snap it to a nearby traversable tile so both the player and
+        # enemy pathing start from valid ground even if the exact centre lands
+        # on water or rock for a future seed.
+        center_guess = Vector2(WORLD_WIDTH / 2, WORLD_HEIGHT / 2)
+        self.base_position = (
+            self.world.find_nearest_traversable(center_guess.x, center_guess.y, max_radius_tiles=10)
+            or center_guess
+        )
 
         # ── Entities ──────────────────────────────────────────────────────
         self.player = Player(self.main, x=self.base_position.x, y=self.base_position.y)
 
-        # Experimental enemy route system. This is deliberately isolated in
+        # Experimental enemy wave system. This is deliberately isolated in
         # enemy.py so the whole feature can be removed later by deleting this
         # instance plus the few update/draw hooks below.
         self.enemy_director = EnemyDirector(
@@ -194,7 +199,13 @@ class Game:
 
         if self.main.debug_mode and show_labels:
             debug_text = FONT_SMALL.render(
-                f"{camera.name} camera: view={camera.view_rect}  base_hits={self.enemy_director.base_hits}",
+                (
+                    f"{camera.name} camera: view={camera.view_rect}  "
+                    f"wave={self.enemy_director.wave_number}  "
+                    f"active={self.enemy_director.active_enemy_count}  "
+                    f"queued={len(self.enemy_director.pending_spawns)}  "
+                    f"base_hits={self.enemy_director.base_hits}"
+                ),
                 True,
                 WHITE,
             )

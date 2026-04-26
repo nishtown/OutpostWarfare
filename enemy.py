@@ -1,22 +1,31 @@
 """
 enemy.py
 --------
-Prototype tower-defence enemy and route system.
+Prototype tower-defence enemy wave system.
 
-This module is deliberately isolated from the rest of the game so it is easy
-to remove if the checkpoint / maze idea does not feel right. The current game
-only needs to:
+This module is deliberately isolated from the rest of the game so the whole
+idea is easy to remove if it does not feel right. The current game only needs
+to:
 
 * create an ``EnemyDirector``
 * call ``update(dt)``
 * call ``draw(surface, camera)``
 
 Everything else lives here.
+
+Current design
+--------------
+* Several spawn points are generated near the world edge.
+* Each spawn point computes a tile path to the base at the map centre.
+* Enemies spawn in waves from those edge points and follow the computed path.
+* Natural terrain obstacles remain meaningful because pathing is built from
+    traversable terrain tiles rather than straight-line movement.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import heapq
 import math
 import random
 
@@ -24,7 +33,7 @@ import pygame
 from pygame import Vector2
 
 from entity import Entity
-from settings import FONT_SMALL, GOLD, RED, TILE_SIZE, VIEWPORT_HEIGHT, VIEWPORT_WIDTH, WHITE, WORLD_HEIGHT, WORLD_WIDTH
+from settings import FONT_SMALL, GOLD, RED, TILE_SIZE, WHITE, WORLD_HEIGHT, WORLD_WIDTH
 
 
 @dataclass(frozen=True)
@@ -50,26 +59,28 @@ ENEMY_TIERS = {
 
 
 @dataclass(frozen=True)
-class RoutePlan:
-    """A generated enemy route from world edge to base."""
+class SpawnPoint:
+    """One enemy spawn point on or near the edge of the world.
 
-    spawn_position: Vector2
-    checkpoints: tuple[Vector2, ...]
-    base_position: Vector2
+    Each spawn point stores a fully-resolved path to the base so enemies can
+    be spawned cheaply during gameplay without recalculating their route.
+    """
 
-    @property
-    def points(self) -> tuple[Vector2, ...]:
-        return (self.spawn_position, *self.checkpoints, self.base_position)
+    key: str
+    side: str
+    tile: tuple[int, int]
+    world_position: Vector2
+    path_points: tuple[Vector2, ...]
 
 
 class Enemy(Entity):
-    """A basic enemy that follows a pre-generated route to the base."""
+    """A basic enemy that follows a pre-generated tile path to the base."""
 
     _WAYPOINT_REACHED_DISTANCE = 16.0
     _COLLISION_W = 18
     _COLLISION_H = 18
 
-    def __init__(self, main, route: RoutePlan, tier_key: str = "scout") -> None:
+    def __init__(self, main, spawn_point: SpawnPoint, tier_key: str = "scout") -> None:
         tier = ENEMY_TIERS[tier_key]
 
         base_image = Entity.load_image(
@@ -82,15 +93,16 @@ class Enemy(Entity):
 
         super().__init__(
             main,
-            route.spawn_position.x,
-            route.spawn_position.y,
+            spawn_point.world_position.x,
+            spawn_point.world_position.y,
             base_image.get_width(),
             base_image.get_height(),
             tags={"enemy", tier.key},
         )
 
         self.tier = tier
-        self.route = route
+        self.spawn_point = spawn_point
+        self.path_points = spawn_point.path_points
         self.original_image = base_image
         self.image = self.original_image.copy()
         self.collision_size = (self._COLLISION_W, self._COLLISION_H)
@@ -105,13 +117,12 @@ class Enemy(Entity):
     @property
     def current_target(self) -> Vector2 | None:
         """Return the next waypoint the enemy is moving toward."""
-        points = self.route.points
-        if self.route_index >= len(points):
+        if self.route_index >= len(self.path_points):
             return None
-        return points[self.route_index]
+        return self.path_points[self.route_index]
 
     def update(self, dt: float) -> None:
-        """Move toward the next waypoint in the route."""
+        """Move toward the next waypoint in the path."""
         if not self.alive:
             return
 
@@ -173,35 +184,62 @@ class Enemy(Entity):
 
 
 class EnemyDirector:
-    """Owns the experimental route and the enemies following it.
+    """Owns the experimental wave-spawn system.
 
     This wrapper keeps the whole idea easy to remove: delete this module and
     the few call sites in ``game.py`` and the rest of the project stays intact.
     """
 
-    _MIN_CHECKPOINTS = 5
-    _MAX_CHECKPOINTS = 10
-    _CHECKPOINT_MIN_RADIUS = TILE_SIZE * 4
-    _CHECKPOINT_MAX_RADIUS = TILE_SIZE * 10
-    _CHECKPOINT_MIN_SPACING = TILE_SIZE * 2.5
+    _SPAWN_POINT_COUNT = 6
+    _MAX_EDGE_SEARCH_MARGINS = 4
+    _MIN_SPAWN_TILE_SPACING = 10
+    _SPAWN_INTERVAL = 0.9
+    _WAVE_COOLDOWN = 4.0
+    _BASE_MARKER_RADIUS = TILE_SIZE * 0.35
 
     def __init__(self, main, world, base_position, seed: int) -> None:
         self.main = main
         self.world = world
-        self.base_position = Vector2(base_position)
+        base_candidate = Vector2(base_position)
+        self.base_position = (
+            self.world.find_nearest_traversable(base_candidate.x, base_candidate.y, max_radius_tiles=10)
+            or base_candidate
+        )
+        self.base_tile = self._world_to_tile(self.base_position)
         self.rng = random.Random(seed + 701)
 
-        self.route = self._generate_route()
+        self.spawn_points = self._generate_spawn_points(self._SPAWN_POINT_COUNT)
         self.enemies: list[Enemy] = []
         self.base_hits = 0
+        self.wave_number = 0
+        self.pending_spawns: list[str] = []
+        self.spawn_timer = 0.0
+        self.time_until_next_wave = 0.75
 
-        # Spawn a single prototype enemy so the new behaviour is visible.
-        self.spawn_enemy("scout")
+    @property
+    def active_enemy_count(self) -> int:
+        return len(self.enemies)
 
-    def spawn_enemy(self, tier_key: str = "scout") -> Enemy:
-        enemy = Enemy(self.main, self.route, tier_key=tier_key)
+    def spawn_enemy(self, tier_key: str = "scout", spawn_point: SpawnPoint | None = None) -> Enemy | None:
+        if not self.spawn_points:
+            return None
+
+        if spawn_point is None:
+            spawn_point = self.rng.choice(self.spawn_points)
+
+        enemy = Enemy(self.main, spawn_point, tier_key=tier_key)
         self.enemies.append(enemy)
         return enemy
+
+    def start_next_wave(self) -> None:
+        """Queue the next wave of enemies.
+
+        Enemy tier composition gradually gets more dangerous as the wave number
+        rises, but the rules are contained here so they are easy to change.
+        """
+        self.wave_number += 1
+        self.pending_spawns = self._build_wave_queue(self.wave_number)
+        self.spawn_timer = 0.0
 
     def update(self, dt: float) -> None:
         for enemy in self.enemies:
@@ -215,153 +253,205 @@ class EnemyDirector:
                 survivors.append(enemy)
         self.enemies = survivors
 
+        if self.pending_spawns and self.spawn_points:
+            self.spawn_timer -= dt
+            while self.pending_spawns and self.spawn_timer <= 0.0:
+                tier_key = self.pending_spawns.pop(0)
+                self.spawn_enemy(tier_key)
+                self.spawn_timer += self._SPAWN_INTERVAL
+        elif not self.enemies:
+            self.time_until_next_wave -= dt
+            if self.time_until_next_wave <= 0.0:
+                self.start_next_wave()
+                self.time_until_next_wave = self._WAVE_COOLDOWN
+
     def draw(self, surface: pygame.Surface, camera) -> None:
-        self._draw_route(surface, camera)
+        self._draw_spawn_points(surface, camera)
         self._draw_base(surface, camera)
+        if self.main.debug_mode:
+            self._draw_paths(surface, camera)
         for enemy in self.enemies:
             enemy.draw(surface, camera)
 
-    def _generate_route(self) -> RoutePlan:
-        checkpoint_count = self.rng.randint(self._MIN_CHECKPOINTS, self._MAX_CHECKPOINTS)
-        checkpoints = self._generate_checkpoints(checkpoint_count)
-        spawn_position = self._pick_spawn_position()
-        ordered_checkpoints = self._order_checkpoints(spawn_position, checkpoints)
-        return RoutePlan(
-            spawn_position=spawn_position,
-            checkpoints=tuple(ordered_checkpoints),
-            base_position=self.base_position,
-        )
+    def _build_wave_queue(self, wave_number: int) -> list[str]:
+        """Return the enemy tiers for a wave.
 
-    def _generate_checkpoints(self, count: int) -> list[Vector2]:
-        checkpoints: list[Vector2] = []
-        attempts = 0
-        max_attempts = count * 50
+        This is intentionally simple and easy to edit. Waves gradually trend
+        from scouts to raiders to brutes.
+        """
+        scouts = max(2, 4 + wave_number)
+        raiders = max(0, wave_number - 2)
+        brutes = max(0, wave_number - 5)
+        queue = (["scout"] * scouts) + (["raider"] * raiders) + (["brute"] * brutes)
+        self.rng.shuffle(queue)
+        return queue
 
-        while len(checkpoints) < count and attempts < max_attempts:
-            attempts += 1
-            angle = self.rng.uniform(0.0, math.tau)
-            radius = self.rng.uniform(self._CHECKPOINT_MIN_RADIUS, self._CHECKPOINT_MAX_RADIUS)
-            candidate = self.base_position + Vector2(math.cos(angle), math.sin(angle)) * radius
-            snapped = self.world.find_nearest_traversable(candidate.x, candidate.y, max_radius_tiles=8)
-            if snapped is None:
+    def _generate_spawn_points(self, count: int) -> list[SpawnPoint]:
+        candidates = self._collect_edge_candidates()
+        selected: list[SpawnPoint] = []
+        selected_tiles: list[tuple[int, int]] = []
+
+        self.rng.shuffle(candidates)
+
+        for side, tile_coord, world_position in candidates:
+            if any(self._tile_distance(tile_coord, other_tile) < self._MIN_SPAWN_TILE_SPACING for other_tile in selected_tiles):
                 continue
 
-            if snapped.distance_to(self.base_position) < self._CHECKPOINT_MIN_RADIUS * 0.85:
+            tile_path = self._find_tile_path(tile_coord, self.base_tile)
+            if tile_path is None or len(tile_path) < 2:
                 continue
 
-            if any(snapped.distance_to(existing) < self._CHECKPOINT_MIN_SPACING for existing in checkpoints):
-                continue
+            path_points = tuple(self._tile_to_world(tile) for tile in tile_path)
+            spawn_point = SpawnPoint(
+                key=f"{side}_{len(selected)}",
+                side=side,
+                tile=tile_coord,
+                world_position=world_position,
+                path_points=path_points,
+            )
+            selected.append(spawn_point)
+            selected_tiles.append(tile_coord)
 
-            checkpoints.append(snapped)
-
-        if len(checkpoints) < count:
-            for index in range(count - len(checkpoints)):
-                angle = (math.tau / max(1, count)) * index
-                fallback = self.base_position + Vector2(math.cos(angle), math.sin(angle)) * self._CHECKPOINT_MAX_RADIUS
-                snapped = self.world.find_nearest_traversable(fallback.x, fallback.y, max_radius_tiles=12)
-                if snapped is not None and all(
-                    snapped.distance_to(existing) >= self._CHECKPOINT_MIN_SPACING * 0.7
-                    for existing in checkpoints
-                ):
-                    checkpoints.append(snapped)
-
-        return checkpoints
-
-    def _pick_spawn_position(self) -> Vector2:
-        candidates: list[Vector2] = []
-        tile = self.world.tile_size
-
-        for margin_tiles in range(0, 5):
-            margin = margin_tiles * tile + tile / 2
-
-            for x in range(tile // 2, WORLD_WIDTH, tile):
-                candidates.extend(self._append_if_traversable(x, margin))
-                candidates.extend(self._append_if_traversable(x, WORLD_HEIGHT - margin))
-
-            for y in range(tile // 2, WORLD_HEIGHT, tile):
-                candidates.extend(self._append_if_traversable(margin, y))
-                candidates.extend(self._append_if_traversable(WORLD_WIDTH - margin, y))
-
-            if candidates:
+            if len(selected) >= count:
                 break
 
-        if not candidates:
-            return self.base_position
+        return selected
 
-        candidates.sort(key=lambda pos: pos.distance_squared_to(self.base_position), reverse=True)
-        top_slice = candidates[: max(1, min(10, len(candidates)))]
-        return self.rng.choice(top_slice)
+    def _collect_edge_candidates(self) -> list[tuple[str, tuple[int, int], Vector2]]:
+        candidates: list[tuple[str, tuple[int, int], Vector2]] = []
+        seen_tiles: set[tuple[int, int]] = set()
+        tile_size = self.world.tile_size
 
-    def _append_if_traversable(self, world_x: float, world_y: float) -> list[Vector2]:
-        snapped = self.world.find_nearest_traversable(world_x, world_y, max_radius_tiles=2)
+        for margin_tiles in range(self._MAX_EDGE_SEARCH_MARGINS + 1):
+            top_y = margin_tiles * tile_size + tile_size / 2
+            bottom_y = WORLD_HEIGHT - margin_tiles * tile_size - tile_size / 2
+            left_x = margin_tiles * tile_size + tile_size / 2
+            right_x = WORLD_WIDTH - margin_tiles * tile_size - tile_size / 2
+
+            for world_x in range(tile_size // 2, WORLD_WIDTH, tile_size):
+                self._append_edge_candidate(candidates, seen_tiles, "north", world_x, top_y)
+                self._append_edge_candidate(candidates, seen_tiles, "south", world_x, bottom_y)
+
+            for world_y in range(tile_size // 2, WORLD_HEIGHT, tile_size):
+                self._append_edge_candidate(candidates, seen_tiles, "west", left_x, world_y)
+                self._append_edge_candidate(candidates, seen_tiles, "east", right_x, world_y)
+
+        candidates.sort(
+            key=lambda item: Vector2(item[2]).distance_squared_to(self.base_position),
+            reverse=True,
+        )
+        return candidates
+
+    def _append_edge_candidate(self, candidates, seen_tiles, side: str, world_x: float, world_y: float) -> None:
+        snapped = self.world.find_nearest_traversable(world_x, world_y, max_radius_tiles=3)
         if snapped is None:
-            return []
-        return [snapped]
-
-    def _order_checkpoints(self, spawn_position: Vector2, checkpoints: list[Vector2]) -> list[Vector2]:
-        remaining = [Vector2(point) for point in checkpoints]
-        ordered: list[Vector2] = []
-        current = Vector2(spawn_position)
-
-        while remaining:
-            next_index = min(
-                range(len(remaining)),
-                key=lambda index: self._route_score(current, remaining[index]),
-            )
-            next_checkpoint = remaining.pop(next_index)
-            ordered.append(next_checkpoint)
-            current = next_checkpoint
-
-        return ordered
-
-    def _route_score(self, start: Vector2, end: Vector2) -> float:
-        """Score a checkpoint segment.
-
-        Distance still matters, but segments that cross a lot of blocked terrain
-        are penalised so the generated prototype route tends to stay on land.
-        """
-        distance = start.distance_to(end)
-        blocked_fraction = self._estimate_blocked_fraction(start, end)
-        return distance * (1.0 + blocked_fraction * 2.5)
-
-    def _estimate_blocked_fraction(self, start: Vector2, end: Vector2) -> float:
-        distance = max(1.0, start.distance_to(end))
-        sample_count = max(3, int(distance // (TILE_SIZE / 2)))
-        blocked = 0
-
-        for step in range(sample_count + 1):
-            t = step / sample_count
-            sample = start.lerp(end, t)
-            if not self.world.is_traversable_at_world(sample.x, sample.y):
-                blocked += 1
-
-        return blocked / (sample_count + 1)
-
-    def _draw_route(self, surface: pygame.Surface, camera) -> None:
-        points = self.route.points
-        if len(points) < 2:
             return
 
-        screen_points: list[tuple[int, int]] = []
-        for point in points:
-            screen_point = camera.world_to_screen(point)
-            screen_points.append((int(screen_point.x), int(screen_point.y)))
+        tile_coord = self._world_to_tile(snapped)
+        if tile_coord == self.base_tile or tile_coord in seen_tiles:
+            return
 
-        if len(screen_points) >= 2:
-            pygame.draw.lines(surface, (250, 215, 120), False, screen_points, 2)
+        seen_tiles.add(tile_coord)
+        candidates.append((side, tile_coord, snapped))
 
-        for index, point in enumerate(points[:-1]):
-            sx, sy = screen_points[index]
-            pygame.draw.circle(surface, (235, 208, 92), (sx, sy), 6)
-            pygame.draw.circle(surface, WHITE, (sx, sy), 6, 1)
+    def _find_tile_path(self, start_tile: tuple[int, int], goal_tile: tuple[int, int]) -> list[tuple[int, int]] | None:
+        """Compute a simple A* path across traversable world tiles."""
+        if start_tile == goal_tile:
+            return [start_tile]
+
+        open_heap: list[tuple[float, int, tuple[int, int]]] = []
+        heapq.heappush(open_heap, (0.0, 0, start_tile))
+        came_from: dict[tuple[int, int], tuple[int, int]] = {}
+        g_score = {start_tile: 0.0}
+        counter = 1
+
+        while open_heap:
+            _, _, current = heapq.heappop(open_heap)
+
+            if current == goal_tile:
+                return self._reconstruct_path(came_from, current)
+
+            for neighbor in self._iter_neighbor_tiles(current):
+                tile = self.world.get_tile(*neighbor)
+                if tile is None or not tile.traversable:
+                    continue
+
+                terrain_type = self.world.terrain_types[tile.terrain_key]
+                tentative_g = g_score[current] + terrain_type.move_cost
+
+                if tentative_g >= g_score.get(neighbor, float("inf")):
+                    continue
+
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g
+                priority = tentative_g + self._heuristic_cost(neighbor, goal_tile)
+                heapq.heappush(open_heap, (priority, counter, neighbor))
+                counter += 1
+
+        return None
+
+    def _iter_neighbor_tiles(self, tile_coord: tuple[int, int]):
+        grid_x, grid_y = tile_coord
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx = grid_x + dx
+            ny = grid_y + dy
+            if 0 <= nx < self.world.columns and 0 <= ny < self.world.rows:
+                yield (nx, ny)
+
+    def _reconstruct_path(
+        self,
+        came_from: dict[tuple[int, int], tuple[int, int]],
+        current: tuple[int, int],
+    ) -> list[tuple[int, int]]:
+        path = [current]
+        while current in came_from:
+            current = came_from[current]
+            path.append(current)
+        path.reverse()
+        return path
+
+    def _heuristic_cost(self, start: tuple[int, int], end: tuple[int, int]) -> float:
+        return abs(start[0] - end[0]) + abs(start[1] - end[1])
+
+    def _world_to_tile(self, position) -> tuple[int, int]:
+        pos = Vector2(position)
+        return int(pos.x // self.world.tile_size), int(pos.y // self.world.tile_size)
+
+    def _tile_to_world(self, tile_coord: tuple[int, int]) -> Vector2:
+        grid_x, grid_y = tile_coord
+        half = self.world.tile_size / 2
+        return Vector2(grid_x * self.world.tile_size + half, grid_y * self.world.tile_size + half)
+
+    def _tile_distance(self, a: tuple[int, int], b: tuple[int, int]) -> float:
+        return math.dist(a, b)
+
+    def _draw_spawn_points(self, surface: pygame.Surface, camera) -> None:
+        for spawn_point in self.spawn_points:
+            screen_pos = camera.world_to_screen(spawn_point.world_position)
+            center = (int(screen_pos.x), int(screen_pos.y))
+            radius = max(5, int(6 * min(camera.scale_x, camera.scale_y)))
+            pygame.draw.circle(surface, (160, 45, 45), center, radius)
+            pygame.draw.circle(surface, WHITE, center, radius, 1)
 
             if camera.scale_x >= 0.75 and camera.scale_y >= 0.75:
-                label = FONT_SMALL.render(str(index), True, WHITE)
-                surface.blit(label, (sx + 8, sy - 6))
+                label = FONT_SMALL.render(spawn_point.side[0].upper(), True, WHITE)
+                surface.blit(label, (center[0] + radius + 3, center[1] - label.get_height() // 2))
+
+    def _draw_paths(self, surface: pygame.Surface, camera) -> None:
+        for spawn_point in self.spawn_points:
+            if len(spawn_point.path_points) < 2:
+                continue
+
+            screen_points = []
+            for point in spawn_point.path_points:
+                screen = camera.world_to_screen(point)
+                screen_points.append((int(screen.x), int(screen.y)))
+
+            pygame.draw.lines(surface, (245, 210, 115), False, screen_points, 1)
 
     def _draw_base(self, surface: pygame.Surface, camera) -> None:
         base_screen = camera.world_to_screen(self.base_position)
-        radius = max(8, int(TILE_SIZE * 0.35 * min(camera.scale_x, camera.scale_y)))
+        radius = max(8, int(self._BASE_MARKER_RADIUS * min(camera.scale_x, camera.scale_y)))
         center = (int(base_screen.x), int(base_screen.y))
 
         pygame.draw.circle(surface, (120, 82, 38), center, radius)
