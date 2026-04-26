@@ -144,6 +144,58 @@ class WorldGenerator:
         tile = self.get_tile_at_world(world_x, world_y)
         return tile is not None and tile.traversable
 
+    def find_nearest_traversable(
+        self,
+        world_x: float,
+        world_y: float,
+        max_radius_tiles: int = 6,
+    ):
+        """Return the nearest traversable tile centre to a world-space point.
+
+        This is a small but useful helper for systems that want an approximate
+        location but still need the final result to land on walkable terrain,
+        such as checkpoint spawning, unit placement, or path anchors.
+        """
+        start_x = int(world_x // self.tile_size)
+        start_y = int(world_y // self.tile_size)
+
+        best_tile = None
+        best_distance_sq = None
+
+        for radius in range(max_radius_tiles + 1):
+            min_x = max(0, start_x - radius)
+            max_x = min(self.columns - 1, start_x + radius)
+            min_y = max(0, start_y - radius)
+            max_y = min(self.rows - 1, start_y + radius)
+
+            for grid_y in range(min_y, max_y + 1):
+                for grid_x in range(min_x, max_x + 1):
+                    if radius > 0 and min_x < grid_x < max_x and min_y < grid_y < max_y:
+                        continue
+
+                    tile = self.get_tile(grid_x, grid_y)
+                    if tile is None or not tile.traversable:
+                        continue
+
+                    tile_center_x = grid_x * self.tile_size + self.tile_size / 2
+                    tile_center_y = grid_y * self.tile_size + self.tile_size / 2
+                    distance_sq = (tile_center_x - world_x) ** 2 + (tile_center_y - world_y) ** 2
+
+                    if best_distance_sq is None or distance_sq < best_distance_sq:
+                        best_tile = tile
+                        best_distance_sq = distance_sq
+
+            if best_tile is not None:
+                break
+
+        if best_tile is None:
+            return None
+
+        return pygame.Vector2(
+            best_tile.grid_x * self.tile_size + self.tile_size / 2,
+            best_tile.grid_y * self.tile_size + self.tile_size / 2,
+        )
+
     def get_transition_profile(self, grid_x: int, grid_y: int, target_terrain) -> TransitionProfile:
         """Return neighbour info relative to *target_terrain*.
 

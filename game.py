@@ -17,8 +17,10 @@ Each frame is built in four steps:
 """
 
 import pygame
+from pygame import Vector2
 
 from camera import Camera
+from enemy import EnemyDirector
 from gameui import GameUI
 from settings import *
 from player import Player
@@ -70,8 +72,24 @@ class Game:
             seed=WORLD_SEED,
         )
 
+        # ── Base anchor ──────────────────────────────────────────────────
+        # The route prototype uses a fixed base in the middle of the world.
+        # The player currently starts here as well, but the player can move
+        # away while enemies continue targeting this static position.
+        self.base_position = Vector2(WORLD_WIDTH / 2, WORLD_HEIGHT / 2)
+
         # ── Entities ──────────────────────────────────────────────────────
-        self.player = Player(self.main, x=WORLD_WIDTH // 2, y=WORLD_HEIGHT // 2)
+        self.player = Player(self.main, x=self.base_position.x, y=self.base_position.y)
+
+        # Experimental enemy route system. This is deliberately isolated in
+        # enemy.py so the whole feature can be removed later by deleting this
+        # instance plus the few update/draw hooks below.
+        self.enemy_director = EnemyDirector(
+            self.main,
+            self.world,
+            self.base_position,
+            WORLD_SEED,
+        )
 
         # ── Cameras ───────────────────────────────────────────────────────
         self.camera = Camera(
@@ -130,6 +148,7 @@ class Game:
         processing, etc. here as the game systems are built out.
         """
         self.player.update(dt)
+        self.enemy_director.update(dt)
         self.camera.update()
         self.minimap_camera.update()
 
@@ -170,11 +189,12 @@ class Game:
         """Render the world into *surface* from the perspective of *camera*."""
         self.world.draw(surface, camera)
         self._draw_landmarks(surface, camera, show_labels=show_labels)
+        self.enemy_director.draw(surface, camera)
         self.player.draw(surface, camera)
 
         if self.main.debug_mode and show_labels:
             debug_text = FONT_SMALL.render(
-                f"{camera.name} camera: view={camera.view_rect}",
+                f"{camera.name} camera: view={camera.view_rect}  base_hits={self.enemy_director.base_hits}",
                 True,
                 WHITE,
             )
