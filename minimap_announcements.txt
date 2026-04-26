@@ -1,0 +1,308 @@
+MINIMAP AND ANNOUNCEMENT SYSTEM GUIDE
+=====================================
+
+This file explains the latest UI support changes:
+
+- enemies now render correctly on the minimap
+- tile grid lines are intentionally softer
+- a reusable announcement system now exists for wave messaging and other alerts
+
+
+1. Why the minimap enemy rendering changed
+------------------------------------------
+
+The old minimap reused the normal enemy draw path.
+
+That was a bad fit because the normal enemy draw path includes:
+
+- the rotated sprite
+- the normal world-space draw rectangle
+- the enemy health bar
+
+At minimap scale, that produced poor results.
+
+The white line you saw was effectively the health-bar outline surviving the
+very small minimap render scale.
+
+That made the enemy marker:
+
+- noisy
+- hard to read
+- visually offset from where the actual enemy felt like it should be
+
+
+2. The new minimap enemy behaviour
+----------------------------------
+
+Enemies now use a dedicated minimap marker instead of their full sprite.
+
+This happens inside enemy.py.
+
+When the camera passed into Enemy.draw(...) is the minimap camera:
+
+- the normal sprite draw path is skipped
+- the health bar is skipped
+- a small colored marker is drawn directly at the enemy's projected minimap position
+
+This is better because:
+
+- the marker stays readable at small scale
+- the marker position is based on the exact enemy world position
+- the minimap becomes tactical rather than decorative noise
+
+
+3. Why the new marker is more accurate
+--------------------------------------
+
+The marker is placed by projecting the enemy's world position through the
+minimap camera.
+
+That means the minimap position is tied to the same camera transform used by
+the rest of the minimap world render.
+
+In practice, the marker now sits where the enemy actually is in the world
+instead of looking like a detached overlay artifact.
+
+
+4. Enemy marker styling
+-----------------------
+
+Each enemy tier uses a small colored dot on the minimap.
+
+Current idea:
+
+- scout: small marker
+- raider: medium marker
+- brute: larger marker
+
+This gives a quick read of danger density without cluttering the minimap with
+full sprites.
+
+
+5. Why the grid lines changed
+-----------------------------
+
+The terrain renderer was drawing a dark border around every tile.
+
+That is acceptable in the main world view when tiles are large, but on the
+minimap it can become too strong because many tiles are compressed into a small
+space.
+
+The result was a heavy black grid that competed with useful information.
+
+
+6. The new grid-line approach
+-----------------------------
+
+The grid outline is still there, but it is now blended against the terrain
+color instead of being drawn as a solid dark line.
+
+The blend strength scales with the on-screen tile size.
+
+That means:
+
+- large world tiles still have some structure
+- small minimap tiles get much softer lines
+- the terrain reads as a surface instead of a checkerboard
+
+
+7. Why the grid blend is not literal per-pixel alpha
+----------------------------------------------------
+
+The world surfaces are normal opaque render targets.
+
+For that reason, the current implementation uses a cheap color blend to mimic
+an alpha-like result instead of creating a separate transparent surface per
+tile every frame.
+
+That choice is intentional because it keeps the render path simpler and avoids
+extra per-tile surface allocation cost.
+
+
+8. Announcement system overview
+-------------------------------
+
+There is now a reusable announcement system in gameui.py.
+
+The main parts are:
+
+Announcement
+- one message entry with text, accent color, and display duration
+
+AnnouncementFeed
+- owns the queue
+- advances time
+- fades banners in and out
+- draws the banner near the top of the main viewport
+
+GameUI.announce(...)
+- the public method gameplay systems call to queue a message
+
+
+9. Why the announcement system lives in the UI
+----------------------------------------------
+
+The announcement feed is a presentation system, so it belongs with UI drawing.
+
+Gameplay systems should not need to know:
+
+- where the banner is drawn
+- how it fades
+- what font it uses
+- how it is styled
+
+They only need a simple way to say:
+
+- show this message
+- use this accent color
+- keep it visible this long
+
+
+10. How wave announcements are triggered
+----------------------------------------
+
+EnemyDirector now accepts an announce_callback.
+
+Game creates the director and passes GameUI.announce as that callback.
+
+When a new wave starts:
+
+- EnemyDirector.start_next_wave() increments the wave number
+- it builds the enemy queue
+- it pushes a message such as "Wave 1 approaching"
+
+This is a clean separation because enemy.py does not need to import or know
+about GameUI directly.
+
+
+11. Other announcement events
+-----------------------------
+
+The system is intentionally generic.
+
+Right now it also announces base breaches in enemy.py.
+
+That means you already have two examples of how to use it:
+
+- wave start announcement
+- combat / warning announcement
+
+You can add more later without changing the banner system itself.
+
+
+12. How the queue works
+-----------------------
+
+Announcements do not overwrite each other immediately.
+
+They are queued and shown one at a time.
+
+That matters because multiple gameplay events can happen close together.
+
+Without a queue, a later message could instantly hide an earlier important one.
+
+
+13. Fade behaviour
+------------------
+
+Each announcement has:
+
+- a total duration
+- a short fade-in period
+- a short fade-out period
+
+This makes the banner feel deliberate instead of appearing and disappearing abruptly.
+
+
+14. Where the banner is drawn
+-----------------------------
+
+The banner is drawn near the top center of the main viewport.
+
+It is not drawn inside the right-hand panel.
+
+That choice was made because wave announcements are global gameplay information
+and should stay visible while the player is looking at the battlefield.
+
+
+15. Files involved
+------------------
+
+enemy.py
+- wave events generate announcement messages
+- minimap enemy marker logic also lives here
+
+game.py
+- updates GameUI each frame so timed announcement state advances
+
+gameui.py
+- owns Announcement and AnnouncementFeed
+- exposes GameUI.announce(...)
+- draws the banner overlay
+
+world_gen.py
+- softens grid lines by blending tile outlines against the terrain color
+
+
+16. Most important extension points
+-----------------------------------
+
+If you want to change the banner behaviour later, these are the main places to edit.
+
+In gameui.py:
+
+AnnouncementFeed.push(...)
+- how messages enter the queue
+
+AnnouncementFeed.update(...)
+- timing and queue advancement
+
+AnnouncementFeed.draw(...)
+- visual layout, fade, border, and text presentation
+
+GameUI.announce(...)
+- the public entry point other systems should call
+
+
+17. Good future uses for the announcement system
+------------------------------------------------
+
+This system is not limited to waves.
+
+Good next uses:
+
+- building completed
+- worker under attack
+- resources too low
+- base health critical
+- new biome discovered
+- research finished
+
+
+18. Why this is better than printing to console
+-----------------------------------------------
+
+The game already prints some development messages to the console.
+
+That is fine for debugging, but not good for player-facing feedback.
+
+The new announcement system keeps important information inside the game window,
+which is where the player is actually looking.
+
+
+19. Mental model
+----------------
+
+The new UI behaviour is easiest to think about in three layers:
+
+Layer 1: world render
+- terrain, landmarks, enemies, player
+
+Layer 2: minimap-specific interpretation
+- enemy dots instead of full enemy sprites
+- softened terrain grid for readability
+
+Layer 3: player-facing event communication
+- queued announcement banners for waves and warnings
+
+That separation is what keeps the system readable and easier to grow later.

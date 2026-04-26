@@ -94,6 +94,7 @@ class Game:
             self.world,
             self.base_position,
             WORLD_SEED,
+            announce_callback=self.ui.announce,
         )
 
         # ── Cameras ───────────────────────────────────────────────────────
@@ -154,6 +155,7 @@ class Game:
         """
         self.player.update(dt)
         self.enemy_director.update(dt)
+        self.ui.update(dt)
         self.camera.update()
         self.minimap_camera.update()
 

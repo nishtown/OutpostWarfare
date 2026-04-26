@@ -257,7 +257,7 @@ class WorldGenerator:
                 # Only draw edge detail when the tile still has enough pixels
                 # on-screen to be readable.
                 if draw_rect.width >= 6 and draw_rect.height >= 6:
-                    self._draw_transition_overlays(surface, draw_rect, tile)
+                    self._draw_transition_overlays(surface, draw_rect, tile, terrain.color)
 
         border_rect = camera.world_rect_to_screen(
             pygame.Rect(0, 0, self.world_width, self.world_height)
@@ -490,7 +490,13 @@ class WorldGenerator:
 
     # ── Current colour-based transition rendering ────────────────────────
 
-    def _draw_transition_overlays(self, surface: pygame.Surface, draw_rect: pygame.Rect, tile: TerrainTile) -> None:
+    def _draw_transition_overlays(
+        self,
+        surface: pygame.Surface,
+        draw_rect: pygame.Rect,
+        tile: TerrainTile,
+        base_color: tuple[int, int, int],
+    ) -> None:
         """Draw simple edge/corner hints using colours only.
 
         This is the temporary bridge between abstract tile metadata and future
@@ -514,7 +520,22 @@ class WorldGenerator:
             if rock_profile.cardinal_mask:
                 self._draw_edge_bands(surface, draw_rect, rock_profile, (76, 69, 60), thickness=1)
 
-        pygame.draw.rect(surface, DARK_BROWN, draw_rect, 1)
+        outline_alpha = max(18, min(78, min(draw_rect.width, draw_rect.height) * 4))
+        outline_color = self._blend_color(base_color, DARK_BROWN, outline_alpha)
+        pygame.draw.rect(surface, outline_color, draw_rect, 1)
+
+    @staticmethod
+    def _blend_color(
+        background: tuple[int, int, int],
+        foreground: tuple[int, int, int],
+        alpha: int,
+    ) -> tuple[int, int, int]:
+        """Return a cheap alpha-style blend for opaque terrain surfaces."""
+        amount = max(0.0, min(1.0, alpha / 255.0))
+        return tuple(
+            int(background[index] + (foreground[index] - background[index]) * amount)
+            for index in range(3)
+        )
 
     def _draw_edge_bands(
         self,

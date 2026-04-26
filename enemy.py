@@ -33,7 +33,7 @@ import pygame
 from pygame import Vector2
 
 from entity import Entity
-from settings import FONT_SMALL, GOLD, RED, TILE_SIZE, WHITE, WORLD_HEIGHT, WORLD_WIDTH
+from settings import BLACK, FONT_SMALL, GOLD, RED, TILE_SIZE, WHITE, WORLD_HEIGHT, WORLD_WIDTH
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,11 @@ class Enemy(Entity):
     _WAYPOINT_REACHED_DISTANCE = 16.0
     _COLLISION_W = 18
     _COLLISION_H = 18
+    _MINIMAP_MARKER_RADIUS = {
+        "scout": 3,
+        "raider": 4,
+        "brute": 5,
+    }
 
     def __init__(self, main, spawn_point: SpawnPoint, tier_key: str = "scout") -> None:
         tier = ENEMY_TIERS[tier_key]
@@ -156,8 +161,25 @@ class Enemy(Entity):
         super().update(dt)
 
     def draw(self, surface: pygame.Surface, camera=None) -> None:
+        if camera is not None and getattr(camera, "name", "") == "minimap":
+            self._draw_minimap_marker(surface, camera)
+            return
+
         super().draw(surface, camera)
         self._draw_health_bar(surface, camera)
+
+    def _draw_minimap_marker(self, surface: pygame.Surface, camera) -> None:
+        """Draw a simple marker on the minimap instead of a full sprite.
+
+        Reusing the normal sprite + health-bar path on the minimap produces a
+        noisy result at tiny scales. A dedicated dot keeps the position exact
+        and the marker readable.
+        """
+        screen_pos = camera.world_to_screen(self.pos)
+        center = (int(screen_pos.x), int(screen_pos.y))
+        radius = self._MINIMAP_MARKER_RADIUS.get(self.tier.key, 3)
+        pygame.draw.circle(surface, self.tier.tint, center, radius)
+        pygame.draw.circle(surface, BLACK, center, radius, 1)
 
     def _draw_health_bar(self, surface: pygame.Surface, camera) -> None:
         if not self.alive:
@@ -197,9 +219,10 @@ class EnemyDirector:
     _WAVE_COOLDOWN = 4.0
     _BASE_MARKER_RADIUS = TILE_SIZE * 0.35
 
-    def __init__(self, main, world, base_position, seed: int) -> None:
+    def __init__(self, main, world, base_position, seed: int, announce_callback=None) -> None:
         self.main = main
         self.world = world
+        self.announce_callback = announce_callback
         base_candidate = Vector2(base_position)
         self.base_position = (
             self.world.find_nearest_traversable(base_candidate.x, base_candidate.y, max_radius_tiles=10)
@@ -240,18 +263,25 @@ class EnemyDirector:
         self.wave_number += 1
         self.pending_spawns = self._build_wave_queue(self.wave_number)
         self.spawn_timer = 0.0
+        self._announce(f"Wave {self.wave_number} approaching", accent=GOLD, duration=3.2)
 
     def update(self, dt: float) -> None:
         for enemy in self.enemies:
             enemy.update(dt)
 
         survivors: list[Enemy] = []
+        breaches_this_frame = 0
         for enemy in self.enemies:
             if enemy.reached_base:
                 self.base_hits += 1
+                breaches_this_frame += 1
             elif enemy.alive:
                 survivors.append(enemy)
         self.enemies = survivors
+
+        if breaches_this_frame:
+            breach_text = "Base breached" if breaches_this_frame == 1 else f"Base breached x{breaches_this_frame}"
+            self._announce(breach_text, accent=RED, duration=2.4)
 
         if self.pending_spawns and self.spawn_points:
             self.spawn_timer -= dt
@@ -272,6 +302,10 @@ class EnemyDirector:
             self._draw_paths(surface, camera)
         for enemy in self.enemies:
             enemy.draw(surface, camera)
+
+    def _announce(self, text: str, accent=GOLD, duration: float = 3.0) -> None:
+        if callable(self.announce_callback):
+            self.announce_callback(text, accent=accent, duration=duration)
 
     def _build_wave_queue(self, wave_number: int) -> list[str]:
         """Return the enemy tiers for a wave.

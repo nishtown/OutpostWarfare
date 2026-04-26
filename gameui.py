@@ -33,6 +33,7 @@ passed here as ``world_surface`` and scaled down with
 real-time top-down overview of whatever is currently visible in-game.
 """
 
+from dataclasses import dataclass
 import math
 import pygame
 from settings import *
@@ -59,6 +60,109 @@ _BTN_ROWS    = 3     # number of build-button rows  (cols × rows = total button
 _BTN_GAP     = 5     # pixel gap between adjacent buttons
 _BTN_H       = 72    # height of each BuildingButton
 _RES_PANEL_H = 132   # total height of the resources panel
+
+
+@dataclass(frozen=True)
+class Announcement:
+    """One time-boxed UI announcement queued for on-screen display."""
+
+    text: str
+    accent: tuple[int, int, int]
+    duration: float
+
+
+class AnnouncementFeed:
+    """Small queued announcement system for wave and combat events.
+
+    Messages are shown one at a time near the top of the main viewport. The
+    UI owns the presentation, while gameplay systems can push messages through
+    ``GameUI.announce`` without knowing how the banner is drawn.
+    """
+
+    _FADE_TIME = 0.3
+    _TOP_MARGIN = 18
+    _BANNER_HEIGHT = 60
+    _MIN_WIDTH = 260
+    _SIDE_MARGIN = 24
+
+    def __init__(self, viewport_rect):
+        self.viewport_rect = pygame.Rect(viewport_rect)
+        self.queue: list[Announcement] = []
+        self.current: Announcement | None = None
+        self.time_remaining = 0.0
+        self.elapsed = 0.0
+
+    def push(self, text, accent=GOLD, duration=3.0):
+        announcement = Announcement(text=text, accent=accent, duration=max(0.8, duration))
+        self.queue.append(announcement)
+        if self.current is None:
+            self._advance()
+
+    def update(self, dt):
+        if self.current is None:
+            if self.queue:
+                self._advance()
+            return
+
+        self.elapsed += dt
+        self.time_remaining -= dt
+        if self.time_remaining <= 0.0:
+            self._advance()
+
+    def draw(self, surface):
+        if self.current is None:
+            return
+
+        alpha_scale = self._alpha_scale()
+        if alpha_scale <= 0.0:
+            return
+
+        caption = FONT_SMALL.render("[ HERALD ]", True, PARCHMENT)
+        text = FONT_MEDIUM.render(self.current.text, True, WHITE)
+        banner_width = min(
+            self.viewport_rect.width - self._SIDE_MARGIN * 2,
+            max(self._MIN_WIDTH, text.get_width() + 76),
+        )
+
+        banner_rect = pygame.Rect(0, 0, banner_width, self._BANNER_HEIGHT)
+        banner_rect.midtop = (self.viewport_rect.centerx, self.viewport_rect.y + self._TOP_MARGIN)
+
+        overlay = pygame.Surface(banner_rect.size, pygame.SRCALPHA)
+        overlay_rect = overlay.get_rect()
+        bg_alpha = int(224 * alpha_scale)
+        border_alpha = int(190 * alpha_scale)
+        accent_alpha = int(245 * alpha_scale)
+
+        pygame.draw.rect(overlay, (18, 14, 10, int(120 * alpha_scale)), overlay_rect.move(0, 4), border_radius=10)
+        pygame.draw.rect(overlay, (*STONE_DARK, bg_alpha), overlay_rect, border_radius=10)
+        pygame.draw.rect(overlay, (*STONE_HILIT, border_alpha), overlay_rect, 2, border_radius=10)
+        pygame.draw.rect(overlay, (*self.current.accent, accent_alpha), (14, 9, overlay_rect.width - 28, 4), border_radius=2)
+        pygame.draw.rect(overlay, (*SHADOW_CLR, border_alpha), (14, overlay_rect.height - 13, overlay_rect.width - 28, 2), border_radius=1)
+
+        caption.set_alpha(int(210 * alpha_scale))
+        text.set_alpha(int(255 * alpha_scale))
+        overlay.blit(caption, (overlay_rect.centerx - caption.get_width() // 2, 11))
+        overlay.blit(text, (overlay_rect.centerx - text.get_width() // 2, 28))
+
+        surface.blit(overlay, banner_rect.topleft)
+
+    def _advance(self):
+        if self.queue:
+            self.current = self.queue.pop(0)
+            self.time_remaining = self.current.duration
+            self.elapsed = 0.0
+        else:
+            self.current = None
+            self.time_remaining = 0.0
+            self.elapsed = 0.0
+
+    def _alpha_scale(self):
+        if self.current is None:
+            return 0.0
+
+        fade_in = min(1.0, self.elapsed / self._FADE_TIME)
+        fade_out = min(1.0, self.time_remaining / self._FADE_TIME)
+        return max(0.0, min(fade_in, fade_out))
 
 
 # ── Low-level draw helpers ────────────────────────────────────────────────────
@@ -618,6 +722,10 @@ class GameUI:
         # y coordinate where the selected-building status strip starts.
         self._status_y = self._res_top + _RES_PANEL_H + 8
 
+        # Announcements are drawn above the main viewport rather than inside
+        # the side panel so important events stay visible during play.
+        self.announcements = AnnouncementFeed(pygame.Rect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT))
+
     # ── Events ───────────────────────────────────────────────────────────────
 
     def handle_events(self, event):
@@ -642,6 +750,14 @@ class GameUI:
                     self.selected_building = btn.building_type
                     print(f"Selected building: {btn.building_type}")
                     break
+
+    def update(self, dt):
+        """Advance transient UI state such as queued announcements."""
+        self.announcements.update(dt)
+
+    def announce(self, text, accent=GOLD, duration=3.0):
+        """Queue a banner announcement for the player."""
+        self.announcements.push(text, accent=accent, duration=duration)
 
     # ── Draw ─────────────────────────────────────────────────────────────────
 
@@ -764,3 +880,6 @@ class GameUI:
         _divider(surface, px + _PAD, title_y - 4, inner_w)
         title = FONT_MEDIUM.render("=  OUTPOST WARFARE  =", True, GOLD)
         surface.blit(title, (px + pw//2 - title.get_width()//2, title_y + 2))
+
+        # Draw announcement banners last so they stay above world content.
+        self.announcements.draw(surface)
