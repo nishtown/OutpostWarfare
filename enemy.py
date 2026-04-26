@@ -493,10 +493,14 @@ class EnemyDirector:
         for enemy in self.enemies:
             enemy.update(dt)
 
+        world_objects = getattr(getattr(self.main, "game", None), "world_objects", None)
+        base_structure = getattr(world_objects, "base_structure", None)
         survivors: list[Enemy] = []
         breaches_this_frame = 0
         for enemy in self.enemies:
             if enemy.reached_base:
+                if base_structure is not None and getattr(base_structure, "alive", False):
+                    base_structure.take_damage(enemy.attack_damage)
                 self.base_hits += 1
                 breaches_this_frame += 1
             elif enemy.alive or enemy.death_animation_active:
@@ -721,6 +725,9 @@ class EnemyDirector:
             pygame.draw.lines(surface, (245, 210, 115), False, screen_points, 1)
 
     def _draw_base(self, surface: pygame.Surface, camera) -> None:
+        if getattr(camera, "name", "") != "minimap":
+            return
+
         base_screen = camera.world_to_screen(self.base_position)
         radius = max(8, int(self._BASE_MARKER_RADIUS * min(camera.scale_x, camera.scale_y)))
         center = (int(base_screen.x), int(base_screen.y))

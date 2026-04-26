@@ -61,6 +61,7 @@ _BTN_ROWS    = 4     # number of build-button rows  (cols × rows = total button
 _BTN_GAP     = 5     # pixel gap between adjacent buttons
 _BTN_H       = 72    # height of each BuildingButton
 _RES_PANEL_H = 132   # total height of the resources panel
+_TOP_BAR_PAD = 10
 
 
 @dataclass(frozen=True)
@@ -416,6 +417,8 @@ class BuildingButton(Button):
         "workshop":   ( 95,  75, 35),
         "market":     (175, 155, 35),
         "lumberyard": ( 55,  95, 35),
+        "stone_quarry": (110, 110, 110),
+        "gold_quarry": (168, 138, 52),
         "arrow_tower": (135, 100, 58),
         "wall":       (130, 124, 114),
         "spike_trap": (110, 90, 58),
@@ -503,6 +506,14 @@ class BuildingButton(Button):
                 log_r = pygame.Rect(cx-10, cy-2 + ly_off*5, 20, 4)
                 pygame.draw.rect(surface, (110, 70, 25), log_r)
                 pygame.draw.rect(surface, drk, log_r, 1)
+        elif t == "stone_quarry":
+            pygame.draw.rect(surface, hi, (cx-10, cy-2, 20, 10))
+            pygame.draw.circle(surface, (130, 130, 130), (cx-5, cy+1), 4)
+            pygame.draw.circle(surface, (156, 156, 156), (cx+3, cy-2), 4)
+        elif t == "gold_quarry":
+            pygame.draw.rect(surface, hi, (cx-10, cy-2, 20, 10))
+            pygame.draw.circle(surface, (190, 162, 66), (cx-5, cy+1), 4)
+            pygame.draw.circle(surface, (224, 196, 86), (cx+3, cy-2), 4)
         elif t == "arrow_tower":
             pygame.draw.rect(surface, hi, (cx-7, base.y-8, 14, 18))
             pygame.draw.rect(surface, drk, (cx-10, base.y-10, 20, 4))
@@ -681,9 +692,10 @@ class GameUI:
         # Panel dimensions – width from settings so changing UI_PANEL_WIDTH
         # automatically adjusts the layout without touching this file.
         self.panel_width  = UI_PANEL_WIDTH
-        self.panel_height = SCREEN_HEIGHT
+        self.panel_height = SCREEN_HEIGHT - TOP_BAR_HEIGHT
         self.panel_x      = SCREEN_WIDTH - self.panel_width
-        self.panel_y      = 0
+        self.panel_y      = TOP_BAR_HEIGHT
+        self.top_bar_rect = pygame.Rect(0, 0, SCREEN_WIDTH, TOP_BAR_HEIGHT)
 
         px      = self.panel_x
         py      = self.panel_y
@@ -706,6 +718,7 @@ class GameUI:
             (BUILD_DEFINITIONS[key].label, format_cost_text(BUILD_DEFINITIONS[key].cost), key)
             for key in BUILD_MENU_ORDER
         ]
+        self.build_rows = max(1, math.ceil(len(building_defs) / _BTN_COLS))
         # Build the button grid, filling columns left-to-right, rows top-to-bottom.
         self.build_buttons = []
         for idx, (name, cost, btype) in enumerate(building_defs):
@@ -718,12 +731,7 @@ class GameUI:
             )
 
         # y coordinate of the bottom edge of the last button row.
-        last_btn_bottom = self._build_top + _BTN_ROWS * (_BTN_H + _BTN_GAP)
-
-        # ── Resources section ─────────────────────────────────────────────
-        self._div2_y   = last_btn_bottom + _BTN_GAP
-        self._res_top  = self._div2_y + _SEC_HDR_H
-        self._res_rect = pygame.Rect(px + _PAD, self._res_top, inner_w, _RES_PANEL_H)
+        last_btn_bottom = self._build_top + self.build_rows * (_BTN_H + _BTN_GAP) - _BTN_GAP
 
         # Current resource totals.  Write to these attributes each frame
         # (or whenever the economy ticks) to keep the display up to date.
@@ -737,16 +745,55 @@ class GameUI:
         self.selected_structure = None
 
         # y coordinate where the selected-building status strip starts.
-        self._status_y = self._res_top + _RES_PANEL_H + 8
-        self._wave_button_y = self._status_y + 66
+        self._status_y = last_btn_bottom + 18
+        self._wave_button_y = self._status_y + 92
 
         # Announcements are drawn above the main viewport rather than inside
         # the side panel so important events stay visible during play.
-        self.announcements = AnnouncementFeed(pygame.Rect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT))
+        self.announcements = AnnouncementFeed(pygame.Rect(0, TOP_BAR_HEIGHT, VIEWPORT_WIDTH, VIEWPORT_HEIGHT))
         self.upgrade_button = Button(px + _PAD, self._wave_button_y, inner_w, 36, "Upgrade")
         self.next_wave_number = 1
         self.wave_timer_remaining = 10.0
         self.wave_in_progress = False
+
+    def _resource_rows(self):
+        return [
+            ("GOLD", self.gold, GOLD, _icon_gold),
+            ("FOOD", self.food, (80, 200, 80), _icon_food),
+            ("WOOD", self.wood, (170, 115, 45), _icon_wood),
+            ("STONE", self.stone, LIGHT_GRAY, _icon_stone),
+        ]
+
+    def _draw_top_bar(self, surface):
+        bar = self.top_bar_rect
+        pygame.draw.rect(surface, STONE_DARK, bar)
+        _stone_courses(surface, bar.x, bar.y, bar.width, bar.height, step=24)
+        _bevel(surface, bar, raised=True, width=3)
+
+        card_gap = 12
+        card_width = (bar.width - (_TOP_BAR_PAD * 2) - (card_gap * 3)) // 4
+        card_height = bar.height - 18
+        card_y = bar.y + 9
+
+        for index, (name, value, color, icon_fn) in enumerate(self._resource_rows()):
+            card_x = bar.x + _TOP_BAR_PAD + index * (card_width + card_gap)
+            card_rect = pygame.Rect(card_x, card_y, card_width, card_height)
+            _stone_fill(surface, card_rect, STONE_MID if index % 2 == 0 else STONE_DARK)
+            _bevel(surface, card_rect, raised=False, width=2)
+
+            icon_fn(surface, card_rect.x + 16, card_rect.centery)
+            label = FONT_SMALL.render(name, True, PARCHMENT_DK)
+            value_surf = FONT_MEDIUM.render(str(value), True, color)
+            surface.blit(label, (card_rect.x + 30, card_rect.y + 5))
+            surface.blit(value_surf, (card_rect.right - value_surf.get_width() - 8, card_rect.y + 4))
+
+            bar_x = card_rect.x + 30
+            bar_width = card_rect.width - 40
+            fill_width = int(bar_width * min(value / 2000.0, 1.0))
+            bar_y = card_rect.bottom - 8
+            pygame.draw.rect(surface, SHADOW_CLR, (bar_x, bar_y, bar_width, 4))
+            if fill_width > 0:
+                pygame.draw.rect(surface, color, (bar_x, bar_y, fill_width, 4))
 
     # ── Events ───────────────────────────────────────────────────────────────
 
@@ -839,6 +886,8 @@ class GameUI:
         ph = self.panel_height
         inner_w = pw - _PAD * 2
 
+        self._draw_top_bar(surface)
+
         # ── Panel background ──────────────────────────────────────────────
         # Solid stone-dark base, horizontal mortar courses, decorative left edge.
         pygame.draw.rect(surface, STONE_DARK, (px, py, pw, ph))
@@ -861,54 +910,6 @@ class GameUI:
         # Draw each building button in the 2-column grid.
         for btn in self.build_buttons:
             btn.draw(surface)
-
-        # ── Resources section ─────────────────────────────────────────────
-        _divider(surface, px + _PAD, self._div2_y, inner_w)
-        _section_header(surface, "[ RESOURCES ]",
-                        px + _PAD, self._div2_y + 4, inner_w, FONT_SMALL)
-
-        # Sunken panel that contains all four resource rows.
-        rr = self._res_rect
-        _stone_fill(surface, rr, STONE_DARK)
-        _bevel(surface, rr, raised=False, width=2)
-
-        # Each tuple: (label, current value, accent colour, icon draw function)
-        res_rows = [
-            ("GOLD",  self.gold,  GOLD,           _icon_gold),
-            ("FOOD",  self.food,  (80,  200,  80), _icon_food),
-            ("WOOD",  self.wood,  (170, 115,  45), _icon_wood),
-            ("STONE", self.stone, LIGHT_GRAY,      _icon_stone),
-        ]
-        row_h = rr.height // len(res_rows)   # height allocated to each resource row
-
-        for i, (name, val, col, icon_fn) in enumerate(res_rows):
-            ry = rr.y + i * row_h
-
-            # Engraved separator between rows (skip the very first row).
-            if i > 0:
-                pygame.draw.line(surface, SHADOW_CLR, (rr.x+2, ry),   (rr.right-2, ry),   1)
-                pygame.draw.line(surface, STONE_DARK, (rr.x+2, ry+1), (rr.right-2, ry+1), 1)
-
-            # Icon (left side of row)
-            icon_fn(surface, rr.x + 12, ry + row_h // 2)
-
-            # Label (resource name, dimmed parchment)
-            lbl = FONT_SMALL.render(name, True, PARCHMENT_DK)
-            surface.blit(lbl, (rr.x + 26, ry + row_h//2 - lbl.get_height()//2))
-
-            # Value (right-aligned, coloured per resource)
-            val_s = FONT_SMALL.render(str(val), True, col)
-            surface.blit(val_s, (rr.right - val_s.get_width() - 6,
-                                 ry + row_h//2 - val_s.get_height()//2))
-
-            # Thin fill bar between the label and value showing quantity / 2000.
-            bar_x     = rr.x + 72
-            bar_total = rr.width - 72 - val_s.get_width() - 14
-            bar_fill  = int(bar_total * min(val / 2000.0, 1.0))
-            bar_y     = ry + row_h - 6
-            pygame.draw.rect(surface, SHADOW_CLR, (bar_x, bar_y, bar_total, 3))  # trough
-            if bar_fill > 0:
-                pygame.draw.rect(surface, col, (bar_x, bar_y, bar_fill, 3))       # fill
 
         # ── Selected building status strip ────────────────────────────────
         # Only rendered if there is vertical space between here and the footer.
@@ -938,13 +939,30 @@ class GameUI:
                     total_plots = len(getattr(structure, "farm_plots", []))
                     hint_lines.append(f"Food Produced: {structure.food_produced}")
                     hint_lines.append(f"Plots Ready: {ready_plots}/{total_plots}")
-                elif structure.definition.key == "lumberyard":
+                elif getattr(structure, "worker_resource_key", None) == "tree":
                     hint_lines.append(f"Wood Delivered: {structure.wood_delivered}")
                     upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"
                     upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
                     hint_lines.append(
                         f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
                     )
+                elif getattr(structure, "worker_resource_key", None) == "rock":
+                    hint_lines.append(f"Stone Delivered: {getattr(structure, 'stone_delivered', 0)}")
+                    upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"
+                    upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
+                    hint_lines.append(
+                        f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
+                    )
+                elif getattr(structure, "worker_resource_key", None) == "gold":
+                    hint_lines.append(f"Gold Delivered: {getattr(structure, 'gold_delivered', 0)}")
+                    upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"
+                    upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
+                    hint_lines.append(
+                        f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
+                    )
+                elif structure.definition.key == "main_base":
+                    hint_lines.append("Protect the settlement core")
+                    hint_lines.append("Enemy contact damages the base")
                 else:
                     if structure.definition.food_upkeep > 0:
                         upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"

@@ -30,6 +30,9 @@ from settings import DARK_BROWN, FONT_SMALL, GOLD, GREEN, LIGHT_GRAY, ORANGE, RE
 BUILDING_SPRITE_PATHS = {
     "farm": ("assets", "buildings", "lumberyard", "4.png"),
     "lumberyard": ("assets", "buildings", "lumberyard", "4.png"),
+    "stone_quarry": ("assets", "buildings", "lumberyard", "4.png"),
+    "gold_quarry": ("assets", "buildings", "lumberyard", "4.png"),
+    "main_base": ("assets", "buildings", "lumberyard", "4.png"),
 }
 WORKER_SPRITE_PATHS = [
     ("assets", "workers", f"characterBlue ({index}).png")
@@ -49,8 +52,9 @@ RESOURCE_TERRAIN_RULES = {
     "gold": {"grass", "forest", "sand"},
 }
 STRUCTURE_RENDER_OFFSETS = {
-    "arrow_tower": 24,
+    "arrow_tower": 32,
 }
+RESOURCE_CLUSTER_MAX = 5
 TOWER_UPGRADE_LEVELS = {
     "arrow_tower": (
         {
@@ -98,6 +102,8 @@ class BuildDefinition:
     projectile_speed: float = 0.0
     attack_cooldown: float = 0.0
     food_upkeep: int = 0
+    worker_resource_key: str | None = None
+    supports_regrowth: bool = False
     is_trap: bool = False
     trap_damage: float = 0.0
     hidden_to_enemy: bool = False
@@ -115,12 +121,27 @@ BUILD_DEFINITIONS = {
     "lumberyard": BuildDefinition(
         "lumberyard", "Lumberyard", {"wood": 32, "stone": 10}, max_health=130.0, color=(97, 74, 44),
         target_priority=3, detour_radius=TILE_SIZE * 2.4, food_upkeep=1,
+        worker_resource_key="tree", supports_regrowth=True,
+    ),
+    "stone_quarry": BuildDefinition(
+        "stone_quarry", "Stone Quarry", {"wood": 34, "stone": 14}, max_health=140.0, color=(118, 112, 104),
+        target_priority=3, detour_radius=TILE_SIZE * 2.4, food_upkeep=1,
+        worker_resource_key="rock",
+    ),
+    "gold_quarry": BuildDefinition(
+        "gold_quarry", "Gold Quarry", {"wood": 36, "stone": 18, "gold": 12}, max_health=145.0, color=(160, 138, 64),
+        target_priority=3, detour_radius=TILE_SIZE * 2.4, food_upkeep=1,
+        worker_resource_key="gold",
     ),
     "arrow_tower": BuildDefinition(
         "arrow_tower", "Arrow Tower", {"wood": 40, "stone": 18}, max_health=150.0, color=(120, 94, 52),
         target_priority=4, detour_radius=TILE_SIZE * 2.8,
         tower_range=TILE_SIZE * 3.7, projectile_damage=14.0, projectile_speed=340.0, attack_cooldown=0.85,
         food_upkeep=2,
+    ),
+    "main_base": BuildDefinition(
+        "main_base", "Main Base", {}, max_health=560.0, color=(150, 126, 86),
+        target_priority=8, detour_radius=TILE_SIZE * 3.2,
     ),
     "wall": BuildDefinition(
         "wall", "Wall", {"wood": 10, "stone": 20}, max_health=260.0, color=(126, 118, 104),
@@ -147,6 +168,8 @@ BUILD_DEFINITIONS = {
 BUILD_MENU_ORDER = [
     "farm",
     "lumberyard",
+    "stone_quarry",
+    "gold_quarry",
     "arrow_tower",
     "wall",
     "spike_trap",
@@ -208,7 +231,7 @@ def _footprint_for_key(building_key: str) -> tuple[int, int]:
     if building_key == "spike_trap":
         size = int(TILE_SIZE * 0.42)
         return size, size
-    if building_key in {"farm", "lumberyard"}:
+    if building_key in {"farm", "lumberyard", "stone_quarry", "gold_quarry", "main_base"}:
         return int(TILE_SIZE * 1.14), int(TILE_SIZE * 0.42)
     if building_key == "arrow_tower":
         return int(TILE_SIZE * 0.54), int(TILE_SIZE * 0.34)
@@ -242,6 +265,12 @@ class Structure(Entity):
         Vector2(35, 34),
         Vector2(70, 22),
     )
+    _WORKER_CARRY_COLORS = {
+        "wood": (130, 88, 46),
+        "stone": (122, 122, 122),
+        "gold": (220, 188, 78),
+        "sapling": (62, 156, 70),
+    }
 
     def __init__(self, main, definition: BuildDefinition, position: Vector2) -> None:
         image = self._build_surface(definition, level=1)
@@ -274,13 +303,17 @@ class Structure(Entity):
         self.projectile_damage = definition.projectile_damage
         self.projectile_speed = definition.projectile_speed
         self.attack_cooldown = definition.attack_cooldown
-        self.workers = self._create_workers() if definition.key == "lumberyard" else []
+        self.worker_resource_key = definition.worker_resource_key
+        self.supports_regrowth = definition.supports_regrowth
+        self.workers = self._create_workers() if self.worker_resource_key is not None else []
         self.farm_plots = self._create_farm_plots() if definition.key == "farm" else []
         self.is_operational = True
         self.food_upkeep_timer = self._FOOD_UPKEEP_INTERVAL
         self.food_consumed = 0
         self.food_produced = 0
         self.wood_delivered = 0
+        self.stone_delivered = 0
+        self.gold_delivered = 0
         self.trees_planted = 0
         self._apply_level_stats(reset_health=True)
 
@@ -337,8 +370,8 @@ class Structure(Entity):
         if self.definition.key == "farm" and self.farm_plots:
             self._update_farm(dt)
 
-        if self.definition.key == "lumberyard" and self.workers and self.is_operational:
-            self._update_lumberyard(dt)
+        if self.workers and self.is_operational:
+            self._update_resource_hub(dt)
 
         super().update(dt)
 
@@ -348,10 +381,10 @@ class Structure(Entity):
             draw_image = self.image.copy()
             draw_image.set_alpha(150)
 
-        if self.definition.key == "farm" and getattr(camera, "name", "") != "minimap":
-            self._draw_farm_growth(surface, camera)
+        if self.workers and getattr(camera, "name", "") != "minimap":
+            self._draw_workers(surface, camera, behind_sprite=True)
 
-        if self.definition.key in {"farm", "lumberyard", "arrow_tower"}:
+        if self.definition.key in {"farm", "lumberyard", "stone_quarry", "gold_quarry", "main_base", "arrow_tower"}:
             draw_rect = self._sprite_draw_rect(camera)
             if draw_rect.width <= 0 or draw_rect.height <= 0:
                 return
@@ -367,8 +400,11 @@ class Structure(Entity):
         else:
             surface.blit(draw_image, self.rect)
 
-        if self.definition.key == "lumberyard" and getattr(camera, "name", "") != "minimap":
-            self._draw_workers(surface, camera)
+        if self.definition.key == "farm" and getattr(camera, "name", "") != "minimap":
+            self._draw_farm_growth(surface, camera)
+
+        if self.workers and getattr(camera, "name", "") != "minimap":
+            self._draw_workers(surface, camera, behind_sprite=False)
 
         if getattr(camera, "name", "") != "minimap" and self.health < self.max_health:
             self._draw_health_bar(surface, camera)
@@ -446,14 +482,15 @@ class Structure(Entity):
                     "base_sprite": sprite,
                     "flip_x": False,
                     "rotation_angle": 0.0,
-                    "carrying_wood": 0,
+                    "carrying_amount": 0,
+                    "carrying_resource": None,
                     "carrying_sapling": False,
                 }
             )
 
         return workers
 
-    def _update_lumberyard(self, dt: float) -> None:
+    def _update_resource_hub(self, dt: float) -> None:
         manager = self._world_objects()
         if manager is None:
             return
@@ -463,35 +500,36 @@ class Structure(Entity):
             target = worker.get("target")
 
             if state == "idle":
-                if worker["carrying_wood"] > 0:
+                if worker["carrying_amount"] > 0:
                     worker["state"] = "returning"
                     continue
 
-                tree_target = self._find_tree_target(manager)
-                if tree_target is not None:
-                    worker["target"] = tree_target
-                    worker["state"] = "moving_to_tree"
+                resource_target = self._find_resource_target(manager)
+                if resource_target is not None:
+                    worker["target"] = resource_target
+                    worker["state"] = "moving_to_resource"
                     continue
 
-                plant_target = self._find_plant_target(manager)
-                if plant_target is not None:
-                    worker["target_pos"] = plant_target
-                    worker["carrying_sapling"] = True
-                    worker["state"] = "moving_to_plant_site"
+                if self.supports_regrowth:
+                    plant_target = self._find_plant_target(manager)
+                    if plant_target is not None:
+                        worker["target_pos"] = plant_target
+                        worker["carrying_sapling"] = True
+                        worker["state"] = "moving_to_plant_site"
                 continue
 
-            if state == "moving_to_tree":
+            if state == "moving_to_resource":
                 if target is None or not getattr(target, "alive", False):
                     worker["target"] = None
                     worker["state"] = "idle"
                     continue
 
                 if self._move_worker_toward(worker, target.pos, dt):
-                    worker["state"] = "chopping"
+                    worker["state"] = "harvesting"
                     worker["timer"] = max(self._LUMBERYARD_CHOP_TIME, getattr(target, "action_duration", self._LUMBERYARD_CHOP_TIME))
                 continue
 
-            if state == "chopping":
+            if state == "harvesting":
                 if target is None or not getattr(target, "alive", False):
                     worker["target"] = None
                     worker["state"] = "idle"
@@ -500,9 +538,11 @@ class Structure(Entity):
                 worker["timer"] -= dt
                 if worker["timer"] <= 0.0:
                     harvest = target.harvest()
-                    worker["carrying_wood"] = harvest.get("wood", 0)
+                    carried_resource = target.definition.resource_key
+                    worker["carrying_amount"] = harvest.get(carried_resource, 0)
+                    worker["carrying_resource"] = carried_resource if worker["carrying_amount"] > 0 else None
                     worker["target"] = None
-                    worker["state"] = "returning" if worker["carrying_wood"] > 0 else "idle"
+                    worker["state"] = "returning" if worker["carrying_amount"] > 0 else "idle"
                 continue
 
             if state == "moving_to_plant_site":
@@ -548,24 +588,27 @@ class Structure(Entity):
                     worker["carrying_sapling"] = False
                     worker["state"] = "idle"
 
-    def _find_tree_target(self, manager):
-        nearby_trees = manager.get_resource_nodes_in_radius(
+    def _find_resource_target(self, manager):
+        if self.worker_resource_key is None:
+            return None
+
+        nearby_nodes = manager.get_resource_nodes_in_radius(
             self.pos,
             self._LUMBERYARD_HARVEST_RADIUS,
-            resource_key="tree",
+            resource_key=self.worker_resource_key,
         )
         reserved_targets = {
             worker["target"]
             for worker in self.workers
-            if worker["state"] in {"moving_to_tree", "chopping"} and worker.get("target") is not None
+            if worker["state"] in {"moving_to_resource", "harvesting"} and worker.get("target") is not None
         }
 
-        available_trees = [tree for tree in nearby_trees if tree not in reserved_targets]
-        available_trees = [tree for tree in available_trees if getattr(tree, "is_harvestable", True)]
-        if not available_trees:
+        available_nodes = [node for node in nearby_nodes if node not in reserved_targets]
+        available_nodes = [node for node in available_nodes if getattr(node, "is_harvestable", True)]
+        if not available_nodes:
             return None
 
-        return min(available_trees, key=lambda tree: tree.pos.distance_squared_to(self.pos))
+        return min(available_nodes, key=lambda node: node.pos.distance_squared_to(self.pos))
 
     def _find_plant_target(self, manager) -> Vector2 | None:
         current_trees = manager.get_resource_nodes_in_radius(
@@ -615,15 +658,25 @@ class Structure(Entity):
 
     def _deposit_worker_resources(self, worker: dict) -> None:
         player = self._player()
-        carried_wood = int(worker.get("carrying_wood", 0))
-        if player is not None and carried_wood > 0:
-            player.add_resource("wood", carried_wood)
-            self.wood_delivered += carried_wood
-        worker["carrying_wood"] = 0
+        carried_amount = int(worker.get("carrying_amount", 0))
+        carried_resource = worker.get("carrying_resource")
+        if player is not None and carried_amount > 0 and carried_resource is not None:
+            player.add_resource(carried_resource, carried_amount)
+            if carried_resource == "wood":
+                self.wood_delivered += carried_amount
+            elif carried_resource == "stone":
+                self.stone_delivered += carried_amount
+            elif carried_resource == "gold":
+                self.gold_delivered += carried_amount
+        worker["carrying_amount"] = 0
+        worker["carrying_resource"] = None
 
-    def _draw_workers(self, surface: pygame.Surface, camera) -> None:
+    def _draw_workers(self, surface: pygame.Surface, camera, behind_sprite: bool) -> None:
         for worker in self.workers:
             if worker["state"] == "idle" and worker["pos"].distance_squared_to(self.pos) < 4.0:
+                continue
+
+            if self._worker_should_draw_behind(worker) != behind_sprite:
                 continue
 
             draw_image = worker["base_sprite"]
@@ -646,10 +699,23 @@ class Structure(Entity):
 
             surface.blit(draw_image, draw_rect)
 
-            if worker.get("carrying_wood", 0) > 0:
-                pygame.draw.circle(surface, (130, 88, 46), (draw_rect.right - 4, draw_rect.top + 8), 4)
+            carrying_resource = worker.get("carrying_resource")
+            if worker.get("carrying_amount", 0) > 0 and carrying_resource is not None:
+                indicator_color = self._WORKER_CARRY_COLORS.get(carrying_resource, WHITE)
+                pygame.draw.circle(surface, indicator_color, (draw_rect.right - 4, draw_rect.top + 8), 4)
             elif worker.get("carrying_sapling"):
-                pygame.draw.circle(surface, (62, 156, 70), (draw_rect.right - 4, draw_rect.top + 8), 4)
+                pygame.draw.circle(surface, self._WORKER_CARRY_COLORS["sapling"], (draw_rect.right - 4, draw_rect.top + 8), 4)
+
+    def _worker_should_draw_behind(self, worker: dict) -> bool:
+        if self.image.get_height() <= TILE_SIZE:
+            return False
+
+        worker_rect = pygame.Rect(0, 0, self._WORKER_RENDER_SIZE[0], self._WORKER_RENDER_SIZE[1])
+        worker_rect.midbottom = (int(worker["pos"].x), int(worker["pos"].y))
+        if not self.get_sprite_world_rect().colliderect(worker_rect):
+            return False
+
+        return worker_rect.bottom <= self.get_collision_rect().bottom
 
     def _sprite_draw_rect(self, camera=None) -> pygame.Rect:
         draw_anchor = Vector2(self.pos.x, self.pos.y + self.sprite_offset_y)
@@ -792,7 +858,7 @@ class Structure(Entity):
     def _draw_health_bar(self, surface: pygame.Surface, camera) -> None:
         if camera is None or not hasattr(camera, "world_to_screen"):
             return
-        screen_pos = camera.world_to_screen(self.pos)
+        screen_pos = camera.world_to_screen(Vector2(self.pos.x, self.pos.y + self.sprite_offset_y))
         width = max(10, int(28 * camera.scale_x))
         height = max(3, int(5 * camera.scale_y))
         top_y = int(screen_pos.y) - max(12, int(self.rect.height * camera.scale_y / 2)) - 7
@@ -890,7 +956,20 @@ class Structure(Entity):
 class ResourceNode(Entity):
     """One harvestable tree or rock node."""
 
-    def __init__(self, main, definition: ResourceNodeDefinition, position: Vector2, total_yield: int, planted_by=None) -> None:
+    _CLUSTER_LAYOUTS = {
+        1: (Vector2(0, 0),),
+        2: (Vector2(-10, 2), Vector2(10, -1)),
+        3: (Vector2(-12, 3), Vector2(12, 1), Vector2(0, -9)),
+        4: (Vector2(-13, 3), Vector2(13, 3), Vector2(-4, -10), Vector2(6, -12)),
+        5: (Vector2(-14, 5), Vector2(14, 4), Vector2(-6, -8), Vector2(6, -12), Vector2(0, 0)),
+    }
+    _STACK_SCALE = {
+        "tree": 0.58,
+        "rock": 0.6,
+        "gold": 0.62,
+    }
+
+    def __init__(self, main, definition: ResourceNodeDefinition, position: Vector2, total_yield: int, planted_by=None, cluster_count: int = 1) -> None:
         image = self._build_surface(definition)
         super().__init__(
             main,
@@ -911,6 +990,8 @@ class ResourceNode(Entity):
         self.collision_size = (int(TILE_SIZE * 0.5), int(TILE_SIZE * 0.5))
         self.planted_by = planted_by
         self.is_planted = planted_by is not None
+        self.cluster_count = max(1, min(RESOURCE_CLUSTER_MAX, int(cluster_count)))
+        self.cluster_offsets = tuple(self._CLUSTER_LAYOUTS[self.cluster_count])
         self.growth_duration = float(definition.growth_duration) if self.is_planted else 0.0
         self.growth_elapsed = 0.0 if self.growth_duration > 0.0 else self.growth_duration
 
@@ -923,6 +1004,16 @@ class ResourceNode(Entity):
     @property
     def is_harvestable(self) -> bool:
         return self.growth_ratio >= 0.999
+
+    @property
+    def visible_cluster_count(self) -> int:
+        if self.remaining_yield <= 0:
+            return 0
+        if self.growth_ratio < 1.0:
+            return 1
+        if self.total_yield <= 0:
+            return 1
+        return max(1, math.ceil(self.cluster_count * (self.remaining_yield / self.total_yield)))
 
     def update(self, dt: float) -> None:
         if self.growth_duration > 0.0 and self.growth_elapsed < self.growth_duration:
@@ -940,30 +1031,43 @@ class ResourceNode(Entity):
         return {self.definition.resource_key: amount}
 
     def draw(self, surface: pygame.Surface, camera=None) -> None:
+        if camera is not None and hasattr(camera, "world_to_screen"):
+            screen_anchor = camera.world_to_screen(self.pos)
+            scale_x = camera.scale_x
+            scale_y = camera.scale_y
+        else:
+            screen_anchor = self.pos
+            scale_x = 1.0
+            scale_y = 1.0
+
+        growth_scale = 1.0
+        base_alpha = 255
         if self.definition.key == "tree" and self.growth_ratio < 1.0:
             growth_scale = 0.35 + self.growth_ratio * 0.65
+            base_alpha = int(110 + self.growth_ratio * 145)
+
+        visible_count = self.visible_cluster_count
+        cluster_scale = 1.0 if self.cluster_count == 1 else self._STACK_SCALE.get(self.definition.key, 0.6)
+
+        for offset in self.cluster_offsets[:visible_count]:
             draw_image = self.original_image.copy()
-            draw_image.set_alpha(int(110 + self.growth_ratio * 145))
+            if base_alpha < 255:
+                draw_image.set_alpha(base_alpha)
 
-            if camera is not None and hasattr(camera, "world_to_screen"):
-                screen_pos = camera.world_to_screen(self.pos)
-                draw_size = (
-                    max(1, int(draw_image.get_width() * camera.scale_x * growth_scale)),
-                    max(1, int(draw_image.get_height() * camera.scale_y * growth_scale)),
-                )
+            draw_size = (
+                max(1, int(draw_image.get_width() * scale_x * growth_scale * cluster_scale)),
+                max(1, int(draw_image.get_height() * scale_y * growth_scale * cluster_scale)),
+            )
+            if draw_size != draw_image.get_size():
                 draw_image = pygame.transform.smoothscale(draw_image, draw_size)
-                draw_rect = draw_image.get_rect(midbottom=(int(screen_pos.x), int(screen_pos.y)))
-            else:
-                draw_size = (
-                    max(1, int(draw_image.get_width() * growth_scale)),
-                    max(1, int(draw_image.get_height() * growth_scale)),
-                )
-                draw_image = pygame.transform.smoothscale(draw_image, draw_size)
-                draw_rect = draw_image.get_rect(midbottom=(int(self.pos.x), int(self.pos.y)))
 
+            draw_rect = draw_image.get_rect(
+                midbottom=(
+                    int(screen_anchor.x + offset.x * scale_x),
+                    int(screen_anchor.y + offset.y * scale_y),
+                )
+            )
             surface.blit(draw_image, draw_rect)
-        else:
-            super().draw(surface, camera)
 
         if self.main.debug_mode and camera is not None and hasattr(camera, "world_to_screen"):
             screen_pos = camera.world_to_screen(self.pos)
@@ -1056,6 +1160,7 @@ class WorldObjectManager:
         self.resource_nodes: list[ResourceNode] = []
         self.projectiles: list[ArrowProjectile] = []
 
+        self.base_structure = self._create_main_base()
         self._spawn_resource_nodes()
 
     def update(self, dt: float, enemies) -> None:
@@ -1112,6 +1217,9 @@ class WorldObjectManager:
             return False, "That ground cannot support a structure"
 
         placement_rect = self._structure_rect(snapped, definition)
+        if placement_rect.colliderect(player.get_collision_rect()):
+            return False, "Do not place a building on top of the player"
+
         if placement_rect.collidepoint(int(self.base_position.x), int(self.base_position.y)):
             return False, "Keep the central base clear"
 
@@ -1223,12 +1331,13 @@ class WorldObjectManager:
             return None
 
         definition = RESOURCE_DEFINITIONS[resource_key]
+        cluster_count = 1 if planted_by is not None else self.rng.randint(1, RESOURCE_CLUSTER_MAX)
         yield_amount = (
             int(total_yield)
             if total_yield is not None
-            else self.rng.randint(definition.min_yield, definition.max_yield)
+            else self.rng.randint(definition.min_yield, definition.max_yield) * cluster_count
         )
-        node = ResourceNode(self.main, definition, snapped, yield_amount, planted_by=planted_by)
+        node = ResourceNode(self.main, definition, snapped, yield_amount, planted_by=planted_by, cluster_count=cluster_count)
         self.resource_nodes.append(node)
         return node
 
@@ -1395,6 +1504,11 @@ class WorldObjectManager:
     def _snap_to_tile_center(self, world_position) -> Vector2:
         tile = self._tile_coord(world_position)
         return self._tile_center(tile)
+
+    def _create_main_base(self) -> Structure:
+        structure = Structure(self.main, BUILD_DEFINITIONS["main_base"], self.base_position)
+        self.structures.append(structure)
+        return structure
 
     def _announce(self, text: str, accent=GOLD, duration: float = 2.0) -> None:
         if callable(self.announce_callback):

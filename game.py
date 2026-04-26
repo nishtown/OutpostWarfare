@@ -158,7 +158,7 @@ class Game:
         self.player.handle_event(event)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if event.pos[0] < VIEWPORT_WIDTH:
+            if self._is_world_screen_position(event.pos):
                 if self.ui.selected_building:
                     self.try_place_selected_building(event.pos)
                     return
@@ -227,7 +227,7 @@ class Game:
         return True
 
     def try_start_player_harvest(self, screen_pos) -> bool:
-        if screen_pos[0] >= VIEWPORT_WIDTH:
+        if not self._is_world_screen_position(screen_pos):
             return False
 
         clicked_world = self._screen_to_world(screen_pos)
@@ -256,8 +256,15 @@ class Game:
     def _screen_to_world(self, screen_pos) -> Vector2:
         screen_x, screen_y = screen_pos
         return Vector2(
-            self.camera.offset.x + screen_x / self.camera.scale_x,
-            self.camera.offset.y + screen_y / self.camera.scale_y,
+            self.camera.offset.x + (screen_x - VIEWPORT_X) / self.camera.scale_x,
+            self.camera.offset.y + (screen_y - VIEWPORT_Y) / self.camera.scale_y,
+        )
+
+    def _is_world_screen_position(self, screen_pos) -> bool:
+        screen_x, screen_y = screen_pos
+        return (
+            VIEWPORT_X <= screen_x < VIEWPORT_X + VIEWPORT_WIDTH
+            and VIEWPORT_Y <= screen_y < VIEWPORT_Y + VIEWPORT_HEIGHT
         )
 
     def _draw_landmarks(self, surface, camera, show_labels=False):
@@ -342,7 +349,7 @@ class Game:
         self._render_world(self.minimap_surface, self.minimap_camera)
 
         # ── Step 2: composite the main camera surface onto the display ────
-        screen.blit(self.world_surface, (0, 0))
+        screen.blit(self.world_surface, (VIEWPORT_X, VIEWPORT_Y))
 
         # ── Step 3: draw the UI using the wider minimap camera surface ────
         self.ui.draw(

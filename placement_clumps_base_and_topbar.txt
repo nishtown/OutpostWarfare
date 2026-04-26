@@ -1,0 +1,261 @@
+PLACEMENT SAFETY, RESOURCE CLUMPS, BASE HEALTH, AND TOP BAR UI
+=============================================================
+
+Purpose
+-------
+This document explains the pass that added:
+- placement safety so buildings cannot trap the player inside their collider
+- resource clump rendering so one node can visually contain multiple trees,
+  rocks, or gold deposits on the same tile
+- stone and gold quarries using the same structure sprite family as the
+  lumberyard
+- a real main base structure with health that goes down when enemies reach it
+- a top resource bar that shifts the playable world viewport downward
+
+
+1. Placement safety around the player
+-------------------------------------
+Problem:
+A building could be placed in a way that left the player inside the new
+collision box.
+
+Current solution:
+- placement now checks the player's collision rectangle before the structure is
+  created
+- if the new structure footprint overlaps the player, placement is rejected
+
+Result:
+- building placement can no longer pin the player inside a fresh collision box
+- the placement failure happens before cost consumption and before the object is
+  added to the world
+
+Implementation area:
+- world_objects.py
+- WorldObjectManager.place_structure(...)
+
+
+2. Farm growth now draws above the building sprite
+--------------------------------------------------
+Problem:
+The farm's crop rendering sat under the building sprite, which made the visual
+read feel reversed.
+
+Current solution:
+- farm crop growth is drawn after the structure sprite instead of before it
+
+Result:
+- the crop layer visually sits on top of the farm art
+- the farm reads more like a building with active surrounding production rather
+  than a flat ground decal hidden under the structure
+
+Implementation area:
+- world_objects.py
+- Structure.draw(...)
+- Structure._draw_farm_growth(...)
+
+
+3. Workers can pass behind their structure sprite
+-------------------------------------------------
+Problem:
+Workers always drew in a single pass, which made them look like they were
+floating in front of their home building even when they should be hidden behind
+it.
+
+Current solution:
+- worker drawing is split into two passes inside the structure draw routine
+- workers considered behind the building are drawn before the structure sprite
+- workers considered in front are drawn after the structure sprite
+
+Result:
+- workers now layer against their building much more like the player does
+- tall structure art reads more naturally during harvesting and return trips
+
+Implementation area:
+- world_objects.py
+- Structure._draw_workers(...)
+- Structure._worker_should_draw_behind(...)
+
+
+4. Arrow tower offset increased to 32 pixels
+--------------------------------------------
+Problem:
+The transparent padding in the tower art still made the visible tower feel too
+high relative to the ground.
+
+Current solution:
+- arrow tower render offset increased from 24 pixels to 32 pixels
+- collision and gameplay footprint remain unchanged
+
+Result:
+- the visible sprite sits lower and closer to the ground contact point
+- tower art aligns better without moving its blocker footprint
+
+Implementation area:
+- world_objects.py
+- STRUCTURE_RENDER_OFFSETS
+
+
+5. Resource clumps per tile
+---------------------------
+Requirement:
+Trees, rocks, and gold should be able to appear as clustered piles on a single
+world tile.
+
+Current solution:
+- each spawned resource node now rolls a cluster count from 1 to 5
+- that count controls how many sub-sprites are rendered inside the tile
+- total harvest yield scales with the cluster count
+- as the node is depleted, the number of visible sub-sprites drops
+
+Result:
+- a tile can visually read as a richer pile instead of a lone object
+- more visible pieces means more total harvest available
+- partially depleted piles visibly shrink as resources are taken from them
+
+Important detail:
+This is still one gameplay node per tile, not five separate selectable nodes.
+That keeps the harvesting interaction simple while improving the visual density.
+
+Implementation area:
+- world_objects.py
+- RESOURCE_CLUSTER_MAX
+- ResourceNode.cluster_count
+- ResourceNode.visible_cluster_count
+- ResourceNode.draw(...)
+- WorldObjectManager.spawn_resource_node(...)
+
+
+6. Stone quarry and gold quarry
+-------------------------------
+Requirement:
+Stone and gold should have quarry structures using the same building sprite
+family as the lumberyard.
+
+Current solution:
+- stone quarry and gold quarry are new build options
+- both use the lumberyard structure sprite path
+- both spawn workers using the existing worker system
+- quarry workers harvest their matching nearby resource type and bring it back
+  to the player inventory
+
+Current roles:
+- lumberyard harvests trees and can replant new trees
+- stone quarry harvests rocks
+- gold quarry harvests gold deposits
+
+Result:
+- the economy now has matching automated production buildings for all three
+  world-gathered resources
+- quarries also participate in the food upkeep model like other operational
+  structures
+
+Implementation area:
+- world_objects.py
+- BUILD_DEFINITIONS
+- BUILD_MENU_ORDER
+- Structure._update_resource_hub(...)
+- Structure._find_resource_target(...)
+- Structure._deposit_worker_resources(...)
+
+
+7. Main base is now a real structure
+------------------------------------
+Requirement:
+The main base should use the same sprite family as the lumberyard and lose
+health when enemies reach it.
+
+Current solution:
+- the world-object manager now creates a main base structure automatically at
+  the central base position
+- the base uses the same building sprite family as the lumberyard
+- enemies that reach the base now reduce the base structure's health
+- the old base marker is kept only on the minimap for location readability
+
+Result:
+- the settlement core is now an actual world object with real health
+- enemy contact has a visible gameplay consequence beyond a breach counter
+- the base can also be selected like other structures for inspection
+
+Implementation area:
+- world_objects.py
+- WorldObjectManager._create_main_base(...)
+- enemy.py
+- EnemyDirector.update(...)
+- EnemyDirector._draw_base(...)
+
+
+8. Top resource bar and shifted play area
+-----------------------------------------
+Requirement:
+Resources should be shown in a bar across the top of the window, which means the
+main playable world has to move down.
+
+Current solution:
+- a dedicated top resource bar now spans the full window width
+- the main world viewport origin is moved down by the top bar height
+- screen-to-world conversion now subtracts that top bar offset
+- the right-side panel begins below the top bar instead of at the top of the
+  window
+- the old resource section has been removed from the right panel
+
+Result:
+- resources stay visible without consuming vertical space inside the side panel
+- the side panel has more room for minimap, construction, and selected
+  structure details
+- world clicking ignores the top strip and only accepts input inside the actual
+  shifted play area
+
+Implementation area:
+- settings.py
+- TOP_BAR_HEIGHT
+- VIEWPORT_X / VIEWPORT_Y / VIEWPORT_HEIGHT
+- game.py
+- Game._is_world_screen_position(...)
+- Game._screen_to_world(...)
+- Game.draw(...)
+- gameui.py
+- GameUI._draw_top_bar(...)
+
+
+9. Selected structure panel updates
+-----------------------------------
+The right-hand selected-structure panel now understands the new structure types.
+
+Current examples:
+- stone quarry shows delivered stone total
+- gold quarry shows delivered gold total
+- main base shows that it is the core structure to protect
+- farms, towers, and lumberyards continue to show their role-specific data
+
+This keeps the new build options legible without adding a second management UI.
+
+
+10. Mental model after this pass
+--------------------------------
+The current world simulation is now cleaner in three ways:
+- placement is safer because the player cannot self-trap with new buildings
+- resource density is more expressive because one tile can visually represent a
+  larger deposit or grove
+- the base and economy are more physical because the main base is a real
+  structure and resources live in visible clusters with dedicated production
+  buildings
+
+At the UI level, the top bar separates global economy state from the side-panel
+management state:
+- top bar = always-visible economy totals
+- right panel = minimap, construction, and selected structure information
+
+That split gives more room for both systems to grow without competing for the
+same vertical strip.
+
+
+11. Natural follow-ups
+----------------------
+1. Add a real defeat state when the main base reaches zero health.
+2. Add different worker or output rates for each quarry type.
+3. Add preview ghost rendering that respects the shifted viewport and the new
+   player-overlap placement rule.
+4. Add dedicated art later for stone quarry, gold quarry, and main base while
+   keeping the current shared sprite path as a fallback.
+5. Add resource-node hover text showing both remaining total yield and current
+   visible clump count.
