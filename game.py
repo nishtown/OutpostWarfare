@@ -346,6 +346,11 @@ class Game:
         self.__init__(self.main)
 
     def _scene_sort_key(self, obj) -> tuple[int, int]:
+        if hasattr(obj, "get_depth_sort_bottom"):
+            depth_bottom = obj.get_depth_sort_bottom()
+            position = getattr(obj, "pos", Vector2())
+            return int(depth_bottom), int(position.x)
+
         if hasattr(obj, "get_collision_rect"):
             collision_rect = obj.get_collision_rect()
             return collision_rect.bottom, collision_rect.centerx

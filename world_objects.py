@@ -246,6 +246,7 @@ class Structure(Entity):
     _LUMBERYARD_CHOP_TIME = 2.6
     _LUMBERYARD_DROP_TIME = 0.45
     _LUMBERYARD_PLANT_TIME = 1.2
+    _QUARRY_DIG_TIME = 8.0
     _FOOD_UPKEEP_INTERVAL = 12.0
     _FOOD_UPKEEP_RETRY_DELAY = 1.0
     _FARM_GROW_TIME = 24.0
@@ -257,6 +258,11 @@ class Structure(Entity):
         Vector2(22, TILE_SIZE * 0.8),
         Vector2(-12, TILE_SIZE * 0.98),
         Vector2(12, TILE_SIZE * 1.02),
+    )
+    _QUARRY_PIT_OFFSETS = (
+        Vector2(-18, TILE_SIZE * 0.76),
+        Vector2(0, TILE_SIZE * 0.9),
+        Vector2(18, TILE_SIZE * 1.04),
     )
     _WORKER_DOOR_OFFSET_Y = 24.0
     _WORKER_EXIT_OFFSET_Y = 54.0
@@ -306,6 +312,7 @@ class Structure(Entity):
         self.supports_regrowth = definition.supports_regrowth
         self.workers = self._create_workers() if self._uses_workers() else []
         self.farm_plots = self._create_farm_plots() if definition.key == "farm" else []
+        self.quarry_pits = self._create_quarry_pits() if self.definition.key in {"stone_quarry", "gold_quarry"} else []
         self.is_operational = True
         self.food_upkeep_timer = self._FOOD_UPKEEP_INTERVAL
         self.food_consumed = 0
@@ -429,6 +436,8 @@ class Structure(Entity):
 
         if self.definition.key == "farm" and getattr(camera, "name", "") != "minimap":
             self._draw_farm_growth(surface, camera)
+        elif self.definition.key in {"stone_quarry", "gold_quarry"} and getattr(camera, "name", "") != "minimap":
+            self._draw_quarry_pits(surface, camera)
 
         if self.workers and getattr(camera, "name", "") != "minimap":
             self._draw_workers(surface, camera, behind_sprite=False)
@@ -444,6 +453,9 @@ class Structure(Entity):
 
     def get_sprite_world_rect(self) -> pygame.Rect:
         return self._sprite_world_rect_for_position(self.pos)
+
+    def get_depth_sort_bottom(self) -> int:
+        return self.get_collision_rect().bottom
 
     def get_collision_rect(self, pos=None) -> pygame.Rect:
         position = Vector2(pos) if pos is not None else self.pos
@@ -605,6 +617,14 @@ class Structure(Entity):
                         worker["carrying_sapling"] = True
                         self._begin_worker_departure(worker, plant_target)
                         worker["state"] = "moving_to_plant_site"
+                        continue
+
+                if self.definition.key in {"stone_quarry", "gold_quarry"}:
+                    dig_target = self._find_quarry_dig_target()
+                    if dig_target is not None:
+                        worker["target_pos"] = dig_target
+                        self._begin_worker_departure(worker, dig_target)
+                        worker["state"] = "moving_to_dig_site"
                 continue
 
             if state == "moving_to_resource":
@@ -648,6 +668,18 @@ class Structure(Entity):
                     worker["timer"] = self._LUMBERYARD_PLANT_TIME
                 continue
 
+            if state == "moving_to_dig_site":
+                dig_target = worker.get("target_pos")
+                if dig_target is None:
+                    worker["state"] = "idle"
+                    worker["route"] = []
+                    continue
+
+                if self._follow_worker_route(worker, dt):
+                    worker["state"] = "digging"
+                    worker["timer"] = self._get_quarry_dig_duration()
+                continue
+
             if state == "planting":
                 worker["timer"] -= dt
                 if worker["timer"] <= 0.0:
@@ -662,6 +694,19 @@ class Structure(Entity):
                     worker["target_pos"] = None
                     worker["carrying_sapling"] = False
                     self._begin_worker_return(worker)
+                continue
+
+            if state == "digging":
+                worker["timer"] -= dt
+                if worker["timer"] <= 0.0:
+                    carried_resource = self._get_worker_inventory_resource_key()
+                    worker["carrying_amount"] = 1 if carried_resource is not None else 0
+                    worker["carrying_resource"] = carried_resource if worker["carrying_amount"] > 0 else None
+                    worker["target_pos"] = None
+                    if worker["carrying_amount"] > 0:
+                        self._begin_worker_return(worker)
+                    else:
+                        worker["state"] = "idle"
                 continue
 
             if state == "returning":
@@ -695,6 +740,37 @@ class Structure(Entity):
             return None
 
         return random.choice(available_plots)
+
+    def _find_quarry_dig_target(self) -> Vector2 | None:
+        reserved_targets = {
+            tuple(worker["target_pos"])
+            for worker in self.workers
+            if worker["state"] in {"moving_to_dig_site", "digging"} and worker.get("target_pos") is not None
+        }
+
+        available_targets = [
+            self.pos + pit["offset"]
+            for pit in self.quarry_pits
+            if tuple(self.pos + pit["offset"]) not in reserved_targets
+        ]
+        if not available_targets:
+            return None
+
+        return random.choice(available_targets)
+
+    def _get_worker_inventory_resource_key(self) -> str | None:
+        if self.worker_resource_key == "tree":
+            return "wood"
+        if self.worker_resource_key == "rock":
+            return "stone"
+        if self.worker_resource_key == "gold":
+            return "gold"
+        return None
+
+    def _get_quarry_dig_duration(self) -> float:
+        if self.definition.key == "gold_quarry":
+            return self._QUARRY_DIG_TIME * 1.35
+        return self._QUARRY_DIG_TIME
 
     def _update_farm_workers(self, dt: float) -> None:
         for worker in self.workers:
@@ -921,6 +997,15 @@ class Structure(Entity):
             if plot["growth"] >= 1.0:
                 plot["ready_timer"] = self._FARM_READY_TIME
 
+    def _create_quarry_pits(self) -> list[dict]:
+        return [
+            {
+                "offset": Vector2(offset),
+                "radius_scale": random.uniform(0.8, 1.15),
+            }
+            for offset in self._QUARRY_PIT_OFFSETS
+        ]
+
     def _draw_farm_growth(self, surface: pygame.Surface, camera) -> None:
         for plot in self.farm_plots:
             growth = max(0.0, min(1.0, float(plot.get("growth", 0.0))))
@@ -954,6 +1039,38 @@ class Structure(Entity):
                 top_y = soil_rect.top - stem_height
                 pygame.draw.line(surface, stem_color, (stem_x, soil_rect.top + 1), (stem_x, top_y), 2)
                 pygame.draw.circle(surface, grain_color, (stem_x, top_y), max(1, int(2 * scale_x)))
+
+    def _draw_quarry_pits(self, surface: pygame.Surface, camera) -> None:
+        spoil_color = (96, 88, 78) if self.definition.key == "stone_quarry" else (124, 104, 48)
+        core_color = (38, 28, 24) if self.definition.key == "stone_quarry" else (58, 42, 18)
+        accent_color = (146, 146, 146) if self.definition.key == "stone_quarry" else (216, 186, 74)
+
+        for pit in self.quarry_pits:
+            world_pos = self.pos + pit["offset"]
+            if camera is not None and hasattr(camera, "world_to_screen"):
+                screen_pos = camera.world_to_screen(world_pos)
+                scale_x = camera.scale_x
+                scale_y = camera.scale_y
+            else:
+                screen_pos = world_pos
+                scale_x = 1.0
+                scale_y = 1.0
+
+            radius_scale = float(pit.get("radius_scale", 1.0))
+            outer_w = max(12, int(22 * scale_x * radius_scale))
+            outer_h = max(6, int(11 * scale_y * radius_scale))
+            inner_w = max(8, int(14 * scale_x * radius_scale))
+            inner_h = max(3, int(6 * scale_y * radius_scale))
+
+            outer_rect = pygame.Rect(0, 0, outer_w, outer_h)
+            outer_rect.midbottom = (int(screen_pos.x), int(screen_pos.y))
+            inner_rect = pygame.Rect(0, 0, inner_w, inner_h)
+            inner_rect.midbottom = (int(screen_pos.x), int(screen_pos.y + max(1, int(1.5 * scale_y))))
+
+            pygame.draw.ellipse(surface, spoil_color, outer_rect)
+            pygame.draw.ellipse(surface, core_color, inner_rect)
+            pygame.draw.ellipse(surface, DARK_BROWN, outer_rect, 1)
+            pygame.draw.circle(surface, accent_color, (outer_rect.centerx - outer_rect.width // 5, outer_rect.centery - 1), max(1, int(2 * scale_x)))
 
     def _draw_selection_outline(self, surface: pygame.Surface, camera) -> None:
         if camera is None or not hasattr(camera, "world_rect_to_screen"):
@@ -1121,7 +1238,8 @@ class Structure(Entity):
         if opaque_bounds.width <= 0 or opaque_bounds.height <= 0:
             return None
 
-        lower_band_height = max(1, math.ceil(opaque_bounds.height / 5))
+        mask_fraction = 0.75 if definition.key == "arrow_tower" else 0.2
+        lower_band_height = max(1, math.ceil(opaque_bounds.height * mask_fraction))
         lower_band = pygame.Rect(
             opaque_bounds.x,
             opaque_bounds.bottom - lower_band_height,
@@ -1216,6 +1334,12 @@ class ResourceNode(Entity):
         if self.total_yield <= 0:
             return 1
         return max(1, math.ceil(self.cluster_count * (self.remaining_yield / self.total_yield)))
+
+    def get_depth_sort_bottom(self) -> int:
+        visible_offsets = self.cluster_offsets[:self.visible_cluster_count]
+        if not visible_offsets:
+            return int(self.pos.y)
+        return int(max(self.pos.y + offset.y for offset in visible_offsets))
 
     def update(self, dt: float) -> None:
         if self.growth_duration > 0.0 and self.growth_elapsed < self.growth_duration:

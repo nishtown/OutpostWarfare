@@ -1,0 +1,138 @@
+TOWER MASKS, RESOURCE DEPTH, AND FALLBACK QUARRY DIGGING
+========================================================
+
+Purpose
+-------
+This document explains the follow-up pass that added:
+- a deeper collision mask for arrow towers
+- resource depth sorting based on their real rendered bottom edge
+- slow fallback digging for stone quarries and gold quarries when no deposits
+  are nearby
+
+
+1. Arrow towers now use a deeper collision mask
+-----------------------------------------------
+Requirement:
+Tower collision should be larger than the lower-fifth footprint used by the
+big building sprites.
+
+Current solution:
+- most buildings still collide only on the lower 20% of their opaque sprite
+  mask
+- arrow towers now use the lower 75% of the opaque mask instead
+- the collision is still anchored to the sprite base, so the tower feels
+  grounded instead of using a generic centered rectangle
+
+Result:
+- arrow towers remain easier to walk behind than before the mask-based system
+- but they now block a more reasonable portion of the tower body than the very
+  small lower-fifth footprint
+
+Implementation area:
+- world_objects.py
+- Structure._get_collision_mask_local_rect(...)
+
+
+2. Resource depth sorting now follows the visible sprite bottom
+--------------------------------------------------------------
+Problem:
+Resources were still being sorted using their centered collision rectangle,
+which does not match how the clustered sprites are actually drawn.
+
+Current solution:
+- resource nodes now expose their own depth-sort bottom value
+- that value uses the lowest currently visible cluster offset instead of the
+  centered collision box
+- the scene sort now checks for object-specific depth values before falling
+  back to collision rects
+
+Result:
+- if the player's bottom Y is lower than the resource, the player appears
+  behind it
+- if the player's bottom Y is higher than the resource, the player appears in
+  front of it
+- clustered nodes behave better because the sort now follows the visible stack
+  rather than a generic centred collider
+
+Implementation area:
+- world_objects.py
+- ResourceNode.get_depth_sort_bottom(...)
+- Structure.get_depth_sort_bottom(...)
+- game.py
+- Game._scene_sort_key(...)
+
+
+3. Quarries and gold quarries now have a slow fallback income loop
+---------------------------------------------------------------
+Requirement:
+Stone quarries and gold quarries should still be able to produce something even
+when there are no nearby deposits, but they should do so slowly.
+
+Current solution:
+- quarry workers still prefer real nearby rock or gold nodes first
+- if no valid nearby node exists, workers now choose a digging pit in front of
+  the structure
+- they walk out to the pit, spend time digging, then return with a very small
+  carried amount
+- gold digging takes longer than stone digging
+
+Current fallback output:
+- stone quarry fallback returns 1 stone per dig cycle
+- gold quarry fallback returns 1 gold per dig cycle
+- the cycle is intentionally slow so real deposits remain better
+
+Result:
+- quarries do not become completely dead structures when the local area is
+  exhausted
+- the fallback income is weak enough that nearby deposits still matter
+
+Implementation area:
+- world_objects.py
+- Structure._update_resource_hub(...)
+- Structure._find_quarry_dig_target(...)
+- Structure._get_quarry_dig_duration(...)
+- Structure._get_worker_inventory_resource_key(...)
+
+
+4. Quarries now render a visible digging hole
+---------------------------------------------
+Requirement:
+The fallback mining loop should have a visible representation rather than just
+silently creating resources.
+
+Current solution:
+- stone and gold quarries now create a small set of pit markers in front of the
+  structure
+- those pits render as layered ellipses with spoil and a darker inner hole
+- stone and gold pits use slightly different accent colours
+
+Result:
+- the fallback production reads like workers digging into the ground rather
+  than magically extracting resources from nothing
+
+Implementation area:
+- world_objects.py
+- Structure._create_quarry_pits(...)
+- Structure._draw_quarry_pits(...)
+
+
+5. Mental model after this pass
+-------------------------------
+The collision and sorting systems are now more specialised where they need to
+be:
+- large buildings keep a narrow grounded footprint
+- towers keep a larger, more practical tower footprint
+- resources sort by their real visual bottom instead of a generic collider
+
+At the economy level, quarries and gold quarries now behave more like a long-
+term staffed production building instead of instantly becoming useless when the
+closest deposits are gone.
+
+
+6. Natural follow-ups
+---------------------
+1. Add a small dust or sparkle effect on quarry pits while a worker is digging.
+2. Add a different fallback output rate per upgrade tier if quarry upgrades are
+   introduced later.
+3. Add a tooltip or selected-structure stat line showing whether the quarry is
+   using local deposits or fallback digging.
