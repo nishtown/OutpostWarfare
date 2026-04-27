@@ -52,7 +52,12 @@ RESOURCE_TERRAIN_RULES = {
     "gold": {"grass", "forest", "sand"},
 }
 STRUCTURE_RENDER_OFFSETS = {
+    "farm": 32,
+    "lumberyard": 32,
+    "stone_quarry": 32,
+    "gold_quarry": 32,
     "arrow_tower": 32,
+    "main_base": 32,
 }
 RESOURCE_CLUSTER_MAX = 5
 TOWER_UPGRADE_LEVELS = {
@@ -151,18 +156,6 @@ BUILD_DEFINITIONS = {
         "spike_trap", "Spike Trap", {"wood": 18, "stone": 6}, max_health=40.0, color=(96, 80, 56),
         blocks_movement=False, is_trap=True, trap_damage=36.0, hidden_to_enemy=True,
     ),
-    "barracks": BuildDefinition(
-        "barracks", "Barracks", {"wood": 34, "stone": 14}, max_health=145.0, color=(122, 56, 50),
-        target_priority=2, detour_radius=TILE_SIZE * 2.0, food_upkeep=1,
-    ),
-    "workshop": BuildDefinition(
-        "workshop", "Workshop", {"wood": 26, "stone": 24}, max_health=140.0, color=(126, 108, 54),
-        target_priority=2, detour_radius=TILE_SIZE * 2.0, food_upkeep=1,
-    ),
-    "market": BuildDefinition(
-        "market", "Market", {"wood": 24, "stone": 12}, max_health=125.0, color=(172, 146, 64),
-        target_priority=2, detour_radius=TILE_SIZE * 2.0, food_upkeep=1,
-    ),
 }
 
 BUILD_MENU_ORDER = [
@@ -173,9 +166,6 @@ BUILD_MENU_ORDER = [
     "arrow_tower",
     "wall",
     "spike_trap",
-    "barracks",
-    "workshop",
-    "market",
 ]
 
 
@@ -246,6 +236,7 @@ class Structure(Entity):
     _WORKER_SPRITE_CACHE: list[pygame.Surface] = []
     _WORKER_RENDER_SIZE = (12, 18)
     _LUMBERYARD_WORKER_COUNT = 2
+    _FARM_WORKER_COUNT = 2
     _LUMBERYARD_HARVEST_RADIUS = TILE_SIZE * 4.0
     _LUMBERYARD_REPLANT_RADIUS = TILE_SIZE * 3.8
     _LUMBERYARD_TREE_TARGET = 6
@@ -265,6 +256,8 @@ class Structure(Entity):
         Vector2(35, 34),
         Vector2(70, 22),
     )
+    _WORKER_DOOR_OFFSET_Y = 24.0
+    _WORKER_EXIT_OFFSET_Y = 54.0
     _WORKER_CARRY_COLORS = {
         "wood": (130, 88, 46),
         "stone": (122, 122, 122),
@@ -305,7 +298,7 @@ class Structure(Entity):
         self.attack_cooldown = definition.attack_cooldown
         self.worker_resource_key = definition.worker_resource_key
         self.supports_regrowth = definition.supports_regrowth
-        self.workers = self._create_workers() if self.worker_resource_key is not None else []
+        self.workers = self._create_workers() if self._uses_workers() else []
         self.farm_plots = self._create_farm_plots() if definition.key == "farm" else []
         self.is_operational = True
         self.food_upkeep_timer = self._FOOD_UPKEEP_INTERVAL
@@ -329,11 +322,30 @@ class Structure(Entity):
     def is_upgradeable(self) -> bool:
         return self.definition.key in TOWER_UPGRADE_LEVELS and self.level < self.max_level
 
+    @property
+    def is_repairable(self) -> bool:
+        return self.definition.key == "arrow_tower" and self.health < self.max_health - 0.01
+
     def get_upgrade_cost(self) -> dict[str, int] | None:
         stages = TOWER_UPGRADE_LEVELS.get(self.definition.key)
         if not stages or self.level >= len(stages):
             return None
         return stages[self.level].get("upgrade_cost")
+
+    def get_repair_cost(self) -> dict[str, int] | None:
+        if not self.is_repairable or self.max_health <= 0.0:
+            return None
+
+        missing_ratio = max(0.0, min(1.0, 1.0 - (self.health / self.max_health)))
+        if missing_ratio <= 0.01:
+            return None
+
+        repair_cost: dict[str, int] = {}
+        for resource_key, amount in self.definition.cost.items():
+            scaled_amount = int(math.ceil(amount * missing_ratio * 0.55))
+            if scaled_amount > 0:
+                repair_cost[resource_key] = scaled_amount
+        return repair_cost or None
 
     def take_damage(self, amount: float) -> None:
         self.revealed = True
@@ -348,6 +360,13 @@ class Structure(Entity):
         current_ratio = 1.0 if self.max_health <= 0 else max(0.0, self.health / self.max_health)
         self.level += 1
         self._apply_level_stats(reset_health=False, current_ratio=current_ratio)
+        return True
+
+    def repair(self) -> bool:
+        if not self.is_repairable:
+            return False
+
+        self.health = self.max_health
         return True
 
     def reveal(self) -> None:
@@ -369,8 +388,10 @@ class Structure(Entity):
 
         if self.definition.key == "farm" and self.farm_plots:
             self._update_farm(dt)
+            if self.workers:
+                self._update_farm_workers(dt)
 
-        if self.workers and self.is_operational:
+        if self.workers and self.definition.key != "farm" and self.is_operational:
             self._update_resource_hub(dt)
 
         super().update(dt)
@@ -448,6 +469,16 @@ class Structure(Entity):
             return None
         return getattr(game, "player", None)
 
+    def _uses_workers(self) -> bool:
+        return self.worker_resource_key is not None or self.definition.key == "farm"
+
+    def get_worker_door_position(self) -> Vector2:
+        door_offset = self.sprite_offset_y if self.sprite_offset_y > 0 else self._WORKER_DOOR_OFFSET_Y
+        return Vector2(self.pos.x, self.pos.y + min(door_offset, self._WORKER_DOOR_OFFSET_Y))
+
+    def get_worker_exit_position(self) -> Vector2:
+        return Vector2(self.pos.x, self.get_worker_door_position().y + self._WORKER_EXIT_OFFSET_Y)
+
     @classmethod
     def _load_worker_surfaces(cls) -> list[pygame.Surface]:
         if cls._WORKER_SPRITE_CACHE:
@@ -469,8 +500,10 @@ class Structure(Entity):
         sprite_indices = list(range(len(worker_sprites)))
         random.shuffle(sprite_indices)
 
+        worker_count = self._FARM_WORKER_COUNT if self.definition.key == "farm" else self._LUMBERYARD_WORKER_COUNT
+
         workers: list[dict] = []
-        for worker_index in range(self._LUMBERYARD_WORKER_COUNT):
+        for worker_index in range(worker_count):
             sprite = worker_sprites[sprite_indices[worker_index % len(sprite_indices)]].copy()
             workers.append(
                 {
@@ -485,10 +518,48 @@ class Structure(Entity):
                     "carrying_amount": 0,
                     "carrying_resource": None,
                     "carrying_sapling": False,
+                    "route": [],
                 }
             )
 
         return workers
+
+    def _set_worker_route(self, worker: dict, waypoints) -> None:
+        worker["route"] = [Vector2(point) for point in waypoints]
+
+    def _follow_worker_route(self, worker: dict, dt: float) -> bool:
+        route = worker.get("route", [])
+        if not route:
+            return True
+
+        if self._move_worker_toward(worker, route[0], dt):
+            route.pop(0)
+
+        return not route
+
+    def _begin_worker_departure(self, worker: dict, destination) -> None:
+        self._set_worker_route(
+            worker,
+            (self.get_worker_door_position(), self.get_worker_exit_position(), Vector2(destination)),
+        )
+
+    def _begin_worker_return(self, worker: dict) -> None:
+        worker["state"] = "returning"
+        self._set_worker_route(
+            worker,
+            (self.get_worker_exit_position(), self.get_worker_door_position(), self.pos),
+        )
+
+    def _finish_worker_return(self, worker: dict) -> None:
+        if worker.get("carrying_amount", 0) > 0:
+            worker["state"] = "dropping_off"
+            worker["timer"] = self._LUMBERYARD_DROP_TIME
+            return
+
+        worker["target"] = None
+        worker["target_pos"] = None
+        worker["carrying_sapling"] = False
+        worker["state"] = "idle"
 
     def _update_resource_hub(self, dt: float) -> None:
         manager = self._world_objects()
@@ -507,6 +578,7 @@ class Structure(Entity):
                 resource_target = self._find_resource_target(manager)
                 if resource_target is not None:
                     worker["target"] = resource_target
+                    self._begin_worker_departure(worker, resource_target.pos)
                     worker["state"] = "moving_to_resource"
                     continue
 
@@ -515,6 +587,7 @@ class Structure(Entity):
                     if plant_target is not None:
                         worker["target_pos"] = plant_target
                         worker["carrying_sapling"] = True
+                        self._begin_worker_departure(worker, plant_target)
                         worker["state"] = "moving_to_plant_site"
                 continue
 
@@ -522,9 +595,10 @@ class Structure(Entity):
                 if target is None or not getattr(target, "alive", False):
                     worker["target"] = None
                     worker["state"] = "idle"
+                    worker["route"] = []
                     continue
 
-                if self._move_worker_toward(worker, target.pos, dt):
+                if self._follow_worker_route(worker, dt):
                     worker["state"] = "harvesting"
                     worker["timer"] = max(self._LUMBERYARD_CHOP_TIME, getattr(target, "action_duration", self._LUMBERYARD_CHOP_TIME))
                 continue
@@ -550,9 +624,10 @@ class Structure(Entity):
                 if plant_target is None:
                     worker["carrying_sapling"] = False
                     worker["state"] = "idle"
+                    worker["route"] = []
                     continue
 
-                if self._move_worker_toward(worker, plant_target, dt):
+                if self._follow_worker_route(worker, dt):
                     worker["state"] = "planting"
                     worker["timer"] = self._LUMBERYARD_PLANT_TIME
                 continue
@@ -570,13 +645,12 @@ class Structure(Entity):
                         self.trees_planted += 1
                     worker["target_pos"] = None
                     worker["carrying_sapling"] = False
-                    worker["state"] = "returning"
+                    self._begin_worker_return(worker)
                 continue
 
             if state == "returning":
-                if self._move_worker_toward(worker, self.pos, dt):
-                    worker["state"] = "dropping_off"
-                    worker["timer"] = self._LUMBERYARD_DROP_TIME
+                if self._follow_worker_route(worker, dt):
+                    self._finish_worker_return(worker)
                 continue
 
             if state == "dropping_off":
@@ -586,7 +660,57 @@ class Structure(Entity):
                     worker["target"] = None
                     worker["target_pos"] = None
                     worker["carrying_sapling"] = False
+                    worker["route"] = []
                     worker["state"] = "idle"
+
+    def _find_farm_plot_target(self) -> Vector2 | None:
+        reserved_targets = {
+            tuple(worker["target_pos"])
+            for worker in self.workers
+            if worker["state"] in {"moving_to_plot", "tending_plot"} and worker.get("target_pos") is not None
+        }
+
+        available_plots = [
+            self.pos + plot["offset"]
+            for plot in self.farm_plots
+            if tuple(self.pos + plot["offset"]) not in reserved_targets
+        ]
+        if not available_plots:
+            return None
+
+        return random.choice(available_plots)
+
+    def _update_farm_workers(self, dt: float) -> None:
+        for worker in self.workers:
+            state = worker["state"]
+
+            if state == "idle":
+                plot_target = self._find_farm_plot_target()
+                if plot_target is None:
+                    continue
+
+                worker["target_pos"] = Vector2(plot_target)
+                self._begin_worker_departure(worker, plot_target)
+                worker["state"] = "moving_to_plot"
+                continue
+
+            if state == "moving_to_plot":
+                if self._follow_worker_route(worker, dt):
+                    worker["state"] = "tending_plot"
+                    worker["timer"] = random.uniform(1.6, 3.4)
+                continue
+
+            if state == "tending_plot":
+                worker["timer"] -= dt
+                if worker["timer"] <= 0.0:
+                    worker["target_pos"] = None
+                    self._begin_worker_return(worker)
+                continue
+
+            if state == "returning":
+                if self._follow_worker_route(worker, dt):
+                    self._finish_worker_return(worker)
+                continue
 
     def _find_resource_target(self, manager):
         if self.worker_resource_key is None:
@@ -1263,6 +1387,22 @@ class WorldObjectManager:
         self._announce(f"{structure.definition.label} upgraded", accent=GREEN, duration=1.5)
         return True, structure.definition.label
 
+    def repair_structure(self, structure, player) -> tuple[bool, str]:
+        if structure is None or not getattr(structure, "alive", False):
+            return False, "Nothing selected"
+        if not getattr(structure, "is_repairable", False):
+            return False, "That tower does not need repairs"
+
+        repair_cost = structure.get_repair_cost() or {}
+        if not player.consume_resources(repair_cost):
+            return False, "Not enough resources"
+        if not structure.repair():
+            player.refund_resources(repair_cost)
+            return False, "Repair failed"
+
+        self._announce(f"{structure.definition.label} repaired", accent=GREEN, duration=1.5)
+        return True, structure.definition.label
+
     def find_harvest_target(self, clicked_world_pos, player_pos, max_range: float, click_radius: float = 48.0):
         clicked = Vector2(clicked_world_pos)
         player = Vector2(player_pos)
@@ -1348,6 +1488,23 @@ class WorldObjectManager:
             if structure.get_collision_rect().colliderect(collision_rect):
                 return structure
         return None
+
+    def find_blocking_resource_for_rect(self, collision_rect: pygame.Rect, resource_keys: set[str] | None = None):
+        allowed_keys = resource_keys or {"tree", "rock", "gold"}
+        for node in self.resource_nodes:
+            if not node.alive or node.definition.key not in allowed_keys:
+                continue
+            if node.get_collision_rect().colliderect(collision_rect):
+                return node
+        return None
+
+    def get_blocked_resource_tiles(self, resource_keys: set[str] | None = None) -> set[tuple[int, int]]:
+        allowed_keys = resource_keys or {"tree", "rock", "gold"}
+        return {
+            self._tile_coord(node.pos)
+            for node in self.resource_nodes
+            if node.alive and node.definition.key in allowed_keys
+        }
 
     def find_blocking_structure_at_world(self, world_position):
         point = Vector2(world_position)

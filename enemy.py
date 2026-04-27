@@ -263,8 +263,25 @@ class Enemy(Entity):
                 self.engagement_target = blocker
                 return
 
+            resource_blocker = manager.find_blocking_resource_for_rect(next_rect)
+            if resource_blocker is not None:
+                self._rebuild_path_from_current_position()
+                return
+
         self.pos = next_pos
         self.main.game.world.add_path_wear(self.pos.x, self.pos.y, step / max(1.0, self.main.game.world.tile_size * 9.0))
+
+    def _rebuild_path_from_current_position(self) -> None:
+        director = getattr(getattr(self.main, "game", None), "enemy_director", None)
+        if director is None:
+            return
+
+        new_path = director.build_path_points_from_world(self.pos)
+        if new_path is None or len(new_path) < 2:
+            return
+
+        self.path_points = new_path
+        self.route_index = 1
 
     def _attack_target(self, target) -> None:
         if self.attack_timer > 0.0:
@@ -576,7 +593,7 @@ class EnemyDirector:
             if tile_path is None or len(tile_path) < 2:
                 continue
 
-            path_points = tuple(self._tile_to_world(tile) for tile in tile_path)
+            path_points = (world_position,) + tuple(self._tile_to_world(tile) for tile in tile_path)
             spawn_point = SpawnPoint(
                 key=f"{side}_{len(selected)}",
                 side=side,
@@ -623,16 +640,43 @@ class EnemyDirector:
             return
 
         tile_coord = self._world_to_tile(snapped)
-        if tile_coord == self.base_tile or tile_coord in seen_tiles:
+        if tile_coord == self.base_tile or tile_coord in seen_tiles or tile_coord in self._blocked_resource_tiles():
             return
 
         seen_tiles.add(tile_coord)
-        candidates.append((side, tile_coord, snapped))
+        candidates.append((side, tile_coord, self._outside_spawn_position(side, tile_coord)))
+
+    def build_path_points_from_world(self, world_position) -> tuple[Vector2, ...] | None:
+        world_pos = Vector2(world_position)
+        start = self.world.find_nearest_traversable(world_pos.x, world_pos.y, max_radius_tiles=4)
+        if start is None:
+            return None
+
+        start_tile = self._world_to_tile(start)
+        if start_tile in self._blocked_resource_tiles():
+            return None
+
+        tile_path = self._find_tile_path(start_tile, self.base_tile)
+        if tile_path is None:
+            return None
+
+        path_points = [world_pos]
+        for tile in tile_path:
+            tile_world = self._tile_to_world(tile)
+            if path_points[-1].distance_squared_to(tile_world) <= 1.0:
+                continue
+            path_points.append(tile_world)
+        return tuple(path_points)
 
     def _find_tile_path(self, start_tile: tuple[int, int], goal_tile: tuple[int, int]) -> list[tuple[int, int]] | None:
         """Compute a simple A* path across traversable world tiles."""
         if start_tile == goal_tile:
             return [start_tile]
+
+        blocked_resource_tiles = self._blocked_resource_tiles()
+        if start_tile in blocked_resource_tiles:
+            return None
+        blocked_resource_tiles.discard(goal_tile)
 
         open_heap: list[tuple[float, int, tuple[int, int]]] = []
         heapq.heappush(open_heap, (0.0, 0, start_tile))
@@ -647,6 +691,9 @@ class EnemyDirector:
                 return self._reconstruct_path(came_from, current)
 
             for neighbor in self._iter_neighbor_tiles(current):
+                if neighbor in blocked_resource_tiles:
+                    continue
+
                 tile = self.world.get_tile(*neighbor)
                 if tile is None or not tile.traversable:
                     continue
@@ -696,6 +743,24 @@ class EnemyDirector:
         grid_x, grid_y = tile_coord
         half = self.world.tile_size / 2
         return Vector2(grid_x * self.world.tile_size + half, grid_y * self.world.tile_size + half)
+
+    def _outside_spawn_position(self, side: str, tile_coord: tuple[int, int]) -> Vector2:
+        tile_center = self._tile_to_world(tile_coord)
+        offset = self.world.tile_size * 0.75
+
+        if side == "north":
+            return Vector2(tile_center.x, -offset)
+        if side == "south":
+            return Vector2(tile_center.x, WORLD_HEIGHT + offset)
+        if side == "west":
+            return Vector2(-offset, tile_center.y)
+        return Vector2(WORLD_WIDTH + offset, tile_center.y)
+
+    def _blocked_resource_tiles(self) -> set[tuple[int, int]]:
+        world_objects = getattr(getattr(self.main, "game", None), "world_objects", None)
+        if world_objects is None:
+            return set()
+        return world_objects.get_blocked_resource_tiles()
 
     def _tile_distance(self, a: tuple[int, int], b: tuple[int, int]) -> float:
         return math.dist(a, b)

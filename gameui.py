@@ -752,9 +752,12 @@ class GameUI:
         # the side panel so important events stay visible during play.
         self.announcements = AnnouncementFeed(pygame.Rect(0, TOP_BAR_HEIGHT, VIEWPORT_WIDTH, VIEWPORT_HEIGHT))
         self.upgrade_button = Button(px + _PAD, self._wave_button_y, inner_w, 36, "Upgrade")
+        self.repair_button = Button(px + _PAD, self._wave_button_y, inner_w, 36, "Repair")
+        self.reset_button = Button(VIEWPORT_X + VIEWPORT_WIDTH // 2 - 84, VIEWPORT_Y + VIEWPORT_HEIGHT // 2 + 34, 168, 42, "Reset Outpost")
         self.next_wave_number = 1
         self.wave_timer_remaining = 10.0
         self.wave_in_progress = False
+        self.game_over = False
 
     def _resource_rows(self):
         return [
@@ -804,16 +807,36 @@ class GameUI:
         once per event inside the main event loop (forwarded from Game).
         """
         if event.type == pygame.MOUSEMOTION:
+            if self.game_over:
+                self.reset_button.hovered = self.reset_button.is_hovered(event.pos)
+                self.upgrade_button.hovered = False
+                self.repair_button.hovered = False
+                return None
+
             # Update hover flag on each button based on the new cursor position.
             for btn in self.build_buttons:
                 btn.hovered = btn.is_hovered(event.pos)
             self.upgrade_button.hovered = (
                 self.selected_structure is not None
                 and getattr(self.selected_structure, "is_upgradeable", False)
+                and not getattr(self.selected_structure, "is_repairable", False)
                 and self.upgrade_button.is_hovered(event.pos)
+            )
+            self.repair_button.hovered = (
+                self.selected_structure is not None
+                and getattr(self.selected_structure, "is_repairable", False)
+                and self.repair_button.is_hovered(event.pos)
             )
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
+            if self.game_over and self.reset_button.hovered:
+                return "reset_game"
+
+            if self.game_over:
+                return None
+
+            if self.repair_button.hovered:
+                return "repair_selected_structure"
             if self.upgrade_button.hovered:
                 return "upgrade_selected_structure"
 
@@ -840,6 +863,12 @@ class GameUI:
         self.selected_structure = structure
         if structure is not None:
             self.clear_build_selection()
+
+    def set_game_over(self, game_over: bool):
+        self.game_over = bool(game_over)
+        if self.game_over:
+            self.clear_build_selection()
+            self.selected_structure = None
 
     def update(self, dt):
         """Advance transient UI state such as queued announcements."""
@@ -929,11 +958,14 @@ class GameUI:
                     hint_lines.append(
                         f"Range {int(structure.tower_range)}  Damage {int(structure.projectile_damage)}"
                     )
-                    upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - offline"
-                    upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
-                    hint_lines.append(
-                        f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
-                    )
+                    if getattr(structure, "is_repairable", False):
+                        hint_lines.append(f"Repair Cost: {format_cost_text(structure.get_repair_cost() or {})}")
+                    else:
+                        upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - offline"
+                        upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
+                        hint_lines.append(
+                            f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
+                        )
                 elif structure.definition.key == "farm":
                     ready_plots = sum(1 for plot in getattr(structure, "farm_plots", []) if plot.get("ready_timer", 0.0) > 0.0)
                     total_plots = len(getattr(structure, "farm_plots", []))
@@ -987,7 +1019,11 @@ class GameUI:
 
         if self._wave_button_y + 36 < py + ph - 42:
             _divider(surface, px + _PAD, self._wave_button_y - 10, inner_w)
-            if self.selected_structure is not None and getattr(self.selected_structure, "is_upgradeable", False):
+            if self.selected_structure is not None and getattr(self.selected_structure, "is_repairable", False):
+                cost_text = format_cost_text(self.selected_structure.get_repair_cost() or {})
+                self.repair_button.set_text(f"Repair {cost_text}")
+                self.repair_button.draw(surface)
+            elif self.selected_structure is not None and getattr(self.selected_structure, "is_upgradeable", False):
                 cost_text = format_cost_text(self.selected_structure.get_upgrade_cost() or {})
                 self.upgrade_button.set_text(f"Upgrade {cost_text}")
                 self.upgrade_button.draw(surface)
@@ -1008,3 +1044,24 @@ class GameUI:
 
         # Draw announcement banners last so they stay above world content.
         self.announcements.draw(surface)
+
+        if self.game_over:
+            self._draw_game_over_overlay(surface)
+
+    def _draw_game_over_overlay(self, surface):
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((8, 6, 4, 170))
+        surface.blit(overlay, (0, 0))
+
+        panel_rect = pygame.Rect(0, 0, 360, 180)
+        panel_rect.center = (VIEWPORT_X + VIEWPORT_WIDTH // 2, VIEWPORT_Y + VIEWPORT_HEIGHT // 2)
+        _stone_fill(surface, panel_rect, STONE_DARK)
+        _bevel(surface, panel_rect, raised=True, width=3)
+
+        title = FONT_LARGE.render("Settlement Fallen", True, GOLD)
+        hint = FONT_MEDIUM.render("Press R or reset to start again", True, PARCHMENT)
+        subhint = FONT_SMALL.render("The main base was destroyed.", True, WHITE)
+        surface.blit(title, title.get_rect(center=(panel_rect.centerx, panel_rect.y + 44)))
+        surface.blit(subhint, subhint.get_rect(center=(panel_rect.centerx, panel_rect.y + 82)))
+        surface.blit(hint, hint.get_rect(center=(panel_rect.centerx, panel_rect.y + 108)))
+        self.reset_button.draw(surface)

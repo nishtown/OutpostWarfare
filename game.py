@@ -63,6 +63,7 @@ class Game:
         # ── UI panel ──────────────────────────────────────────────────────
         self.ui = GameUI()
         self.selected_structure = None
+        self.game_over = False
 
         # ── World generation ──────────────────────────────────────────────
         # The generated world is deterministic: the same WORLD_SEED always
@@ -86,7 +87,7 @@ class Game:
         )
 
         # ── Entities ──────────────────────────────────────────────────────
-        self.player = Player(self.main, x=self.base_position.x, y=self.base_position.y)
+        self.player = Player(self.main, x=self.base_position.x, y=self.base_position.y + (TILE_SIZE * 2))
         self.world_objects = WorldObjectManager(
             self.main,
             self.world,
@@ -128,12 +129,7 @@ class Game:
 
         # Static landmarks sit on top of the generated terrain so camera motion
         # and map readability remain strong while the project is still early.
-        self.landmarks = [
-            {"name": "North Watch", "rect": pygame.Rect(480, 320, 120, 120), "color": (125, 80, 35)},
-            {"name": "Stone Yard", "rect": pygame.Rect(2200, 540, 96, 96), "color": (120, 120, 120)},
-            {"name": "Market Green", "rect": pygame.Rect(1450, 1500, 140, 100), "color": (70, 140, 60)},
-            {"name": "South Gate", "rect": pygame.Rect(700, 2300, 150, 110), "color": (140, 60, 50)},
-        ]
+        self.landmarks = []
 
     # ── Event handling ────────────────────────────────────────────────────────
 
@@ -144,8 +140,17 @@ class Game:
         building placement, etc.) are introduced.
         """
         ui_action = self.ui.handle_events(event)
+        if ui_action == "reset_game":
+            self.reset()
+            return
         if ui_action == "upgrade_selected_structure":
             success, message = self.world_objects.upgrade_structure(self.selected_structure, self.player)
+            if not success:
+                self.ui.announce(message, accent=RED, duration=1.5)
+            self.ui.set_selected_structure(self.selected_structure)
+            return
+        if ui_action == "repair_selected_structure":
+            success, message = self.world_objects.repair_structure(self.selected_structure, self.player)
             if not success:
                 self.ui.announce(message, accent=RED, duration=1.5)
             self.ui.set_selected_structure(self.selected_structure)
@@ -153,6 +158,11 @@ class Game:
         if ui_action == "build_selection_changed":
             if self.ui.selected_building is not None:
                 self._set_selected_structure(None)
+            return
+
+        if self.game_over:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                self.reset()
             return
 
         self.player.handle_event(event)
@@ -186,9 +196,13 @@ class Game:
         Add entity updates, chunk streaming, animation ticks, economy
         processing, etc. here as the game systems are built out.
         """
-        self.player.update(dt)
-        self.enemy_director.update(dt)
-        self.world_objects.update(dt, self.enemy_director.enemies)
+        if not self.game_over:
+            self.player.update(dt)
+            self.enemy_director.update(dt)
+            self.world_objects.update(dt, self.enemy_director.enemies)
+
+            if not getattr(self.world_objects.base_structure, "alive", True):
+                self._trigger_game_over()
 
         if self.selected_structure is not None and not getattr(self.selected_structure, "alive", False):
             self._set_selected_structure(None)
@@ -203,10 +217,12 @@ class Game:
             self.enemy_director.time_until_next_wave,
             self.enemy_director.wave_in_progress,
         )
+        self.ui.set_game_over(self.game_over)
 
         self.ui.update(dt)
-        self.camera.update()
-        self.minimap_camera.update()
+        if not self.game_over:
+            self.camera.update()
+            self.minimap_camera.update()
 
     def can_move_player_to(self, collision_rect):
         """Return True when *collision_rect* stays inside walkable world tiles."""
@@ -227,6 +243,9 @@ class Game:
         return True
 
     def try_start_player_harvest(self, screen_pos) -> bool:
+        if self.game_over:
+            return False
+
         if not self._is_world_screen_position(screen_pos):
             return False
 
@@ -287,6 +306,17 @@ class Game:
     def _set_selected_structure(self, structure):
         self.selected_structure = structure
         self.ui.set_selected_structure(structure)
+
+    def _trigger_game_over(self):
+        if self.game_over:
+            return
+
+        self.game_over = True
+        self._set_selected_structure(None)
+        self.ui.announce("The main base has fallen", accent=RED, duration=4.0, key="game_over", cooldown=0.0)
+
+    def reset(self):
+        self.__init__(self.main)
 
     def _render_world(self, surface, camera, show_labels=False):
         """Render the world into *surface* from the perspective of *camera*."""

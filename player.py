@@ -131,6 +131,8 @@ class Player(Entity):
         # Only one harvest can be active at a time.  Moving cancels it.
         self.harvest_range: float = 78.0
         self.harvest_action: Optional[dict] = None
+        self.harvest_button_held: bool = False
+        self.harvest_screen_pos: tuple[int, int] | None = None
 
     # =========================================================================
     # Event handling
@@ -151,12 +153,20 @@ class Player(Entity):
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 3:   # right mouse – begin harvesting
+                self.harvest_button_held = True
+                self.harvest_screen_pos = event.pos
                 game = getattr(self.main, "game", None)
                 if game is not None:
                     game.try_start_player_harvest(event.pos)
 
+        elif event.type == pygame.MOUSEMOTION:
+            if self.harvest_button_held:
+                self.harvest_screen_pos = event.pos
+
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 3:
+                self.harvest_button_held = False
+                self.harvest_screen_pos = None
                 self.stop_harvest()
 
     # =========================================================================
@@ -314,6 +324,10 @@ class Player(Entity):
             self.stop_harvest()
         else:
             self._tick_harvest(dt)
+            if self.harvest_action is None and self.harvest_button_held and self.harvest_screen_pos is not None:
+                game = getattr(self.main, "game", None)
+                if game is not None:
+                    game.try_start_player_harvest(self.harvest_screen_pos)
 
         # ── 5. Sync rect from pos (base class) ─────────────────────────────
         # NOTE: we already set self.rect above from the rotated image, but

@@ -1,0 +1,275 @@
+REPAIR, WORKER ROUTING, OUTSIDE SPAWNS, AND GAME OVER FLOW
+==========================================================
+
+Purpose
+-------
+This document explains the pass that added:
+- 32-pixel visual offsets for the main building sprites
+- tower repair support in the selected-structure UI
+- door-based worker routing so workers leave and re-enter buildings through the
+  lower middle of the sprite
+- visible farm workers that move between plots
+- enemy spawn anchors that begin outside the playable map
+- enemy path blocking against tree, stone, and gold resource tiles
+- a real game-over state when the main base dies, plus reset controls
+- continuous harvesting while right-click is held
+
+
+1. Building sprite offsets now match the lowered tower style
+-----------------------------------------------------------
+Requirement:
+The major building sprites should sit lower on the ground, similar to the
+arrow tower offset.
+
+Current solution:
+- farm, lumberyard, stone quarry, gold quarry, main base, and arrow tower all
+  now use a 32-pixel render offset
+- the collision footprint does not move, only the visible sprite anchor does
+
+Result:
+- the large building art sits closer to the terrain contact point
+- workers and the player still collide against the same gameplay footprint as
+  before
+
+Implementation area:
+- world_objects.py
+- STRUCTURE_RENDER_OFFSETS
+
+
+2. Placeholder build options and sample landmarks were removed
+-------------------------------------------------------------
+Requirement:
+The leftover sample content such as market-style placeholders should no longer
+appear as active game content.
+
+Current solution:
+- barracks, workshop, and market were removed from the placeable build list
+- the old static sample landmarks in the world renderer were cleared
+
+Result:
+- the sidebar now focuses on the structures that have actual gameplay support
+- the main map no longer draws the earlier placeholder landmark set
+
+Implementation area:
+- world_objects.py
+- BUILD_DEFINITIONS
+- BUILD_MENU_ORDER
+- game.py
+- Game.__init__(...)
+
+
+3. Arrow towers can now be repaired
+-----------------------------------
+Requirement:
+Damaged towers need a repair path instead of staying permanently chipped until
+they are destroyed.
+
+Current solution:
+- arrow towers expose an `is_repairable` state whenever current health is below
+  max health
+- repair cost scales from the tower's base build cost using the missing-health
+  ratio
+- the selected-structure action slot now shows a repair button while the tower
+  is damaged
+- once repaired back to full health, the normal upgrade button returns
+
+Current scope:
+- repair currently applies to arrow towers only
+- repair restores the tower straight back to max health
+
+Result:
+- damaged towers now have a direct maintenance loop
+- the UI keeps upgrade and repair readable by prioritising repair whenever the
+  tower is not at full health
+
+Implementation area:
+- world_objects.py
+- Structure.is_repairable
+- Structure.get_repair_cost(...)
+- Structure.repair(...)
+- WorldObjectManager.repair_structure(...)
+- game.py
+- Game.handle_event(...)
+- gameui.py
+- GameUI.handle_events(...)
+- GameUI.draw(...)
+
+
+4. Workers now use a building door instead of phasing through walls
+-------------------------------------------------------------------
+Requirement:
+Workers should leave and re-enter through the lower middle of the building,
+and they should visibly head downward first when departing.
+
+Current solution:
+- worker-capable structures now define two routing anchors:
+  - a door point near the lower middle of the sprite
+  - an exit point directly below that door
+- when a worker leaves for harvesting, planting, or farm work, its route is:
+  centre -> door -> exit point -> destination
+- when a worker returns, its route is:
+  destination -> exit point -> door -> centre
+
+Result:
+- workers now visibly come out of the correct part of the building
+- departures always begin by moving downward before turning toward the real job
+- return trips look more believable because the worker re-enters through the
+  same doorway instead of clipping into the structure body
+
+Implementation area:
+- world_objects.py
+- Structure.get_worker_door_position(...)
+- Structure.get_worker_exit_position(...)
+- Structure._begin_worker_departure(...)
+- Structure._begin_worker_return(...)
+- Structure._follow_worker_route(...)
+
+
+5. Farms now show workers actively tending the plots
+----------------------------------------------------
+Requirement:
+Farms should look inhabited instead of producing food with no visible labour.
+
+Current solution:
+- farms now create a small set of workers even though they are not harvesting a
+  node type like quarry or lumberyard workers do
+- farm workers leave through the building door, walk to one of the farm plots,
+  spend time tending it, then return through the same door path
+
+Important detail:
+Farm workers are visual labourers. Food production still comes from the farm's
+plot growth system, so the economic model stays simple while the scene feels
+more alive.
+
+Implementation area:
+- world_objects.py
+- Structure._create_workers(...)
+- Structure._update_farm_workers(...)
+- Structure._find_farm_plot_target(...)
+
+
+6. Enemy spawn anchors now start outside the world bounds
+---------------------------------------------------------
+Requirement:
+Enemy spawn points should begin outside the playable map instead of already
+standing on an edge tile inside it.
+
+Current solution:
+- spawn-point generation still chooses a traversable edge tile for pathfinding
+- the visible spawn position is now projected outward beyond the north, south,
+  east, or west boundary
+- the enemy path stores that outside point first, then enters the map through
+  the chosen edge tile path
+
+Result:
+- waves now read more like they are arriving from beyond the map rather than
+  appearing directly inside it
+
+Implementation area:
+- enemy.py
+- EnemyDirector._generate_spawn_points(...)
+- EnemyDirector._outside_spawn_position(...)
+
+
+7. Enemies now avoid resource tiles
+-----------------------------------
+Requirement:
+Enemies should not walk through trees, rocks, or gold deposits.
+
+Current solution:
+- the world-object manager now exposes resource-blocking helpers for movement
+  checks and tile-level pathing checks
+- A* pathfinding skips any tile currently occupied by a blocking resource node
+- if an enemy's immediate next movement step still hits a resource blocker, it
+  asks the director to rebuild its path from the current position
+
+Result:
+- waves route around harvestable resources instead of cutting through them
+- newly blocked local movement can recover by rebuilding the remaining path
+
+Implementation area:
+- world_objects.py
+- WorldObjectManager.find_blocking_resource_for_rect(...)
+- WorldObjectManager.get_blocked_resource_tiles(...)
+- enemy.py
+- Enemy._move_toward(...)
+- Enemy._rebuild_path_from_current_position(...)
+- EnemyDirector._find_tile_path(...)
+- EnemyDirector.build_path_points_from_world(...)
+
+
+8. Main-base death now triggers a real defeat state
+---------------------------------------------------
+Requirement:
+If the main base dies, the run should end and the player should be able to
+reset cleanly.
+
+Current solution:
+- the game now tracks a `game_over` state
+- once the base structure is no longer alive, updates for player, enemies, and
+  world objects stop
+- the UI switches into a defeat overlay with a reset button
+- pressing `R` also resets the run
+- reset works by rebuilding the top-level game state in place
+
+Result:
+- base death now has a clear outcome instead of only removing the base health
+- the player gets both a visible failure state and a quick restart path
+
+Implementation area:
+- game.py
+- Game.update(...)
+- Game._trigger_game_over(...)
+- Game.reset(...)
+- Game.handle_event(...)
+- gameui.py
+- GameUI.set_game_over(...)
+- GameUI._draw_game_over_overlay(...)
+
+
+9. Holding right-click now keeps harvesting
+-------------------------------------------
+Requirement:
+The player should be able to hold right-click and keep harvesting instead of
+re-clicking for each single action cycle.
+
+Current solution:
+- the player now remembers whether right mouse is currently held
+- when one harvest cycle finishes, the player immediately tries to begin a new
+  harvest action at the remembered cursor position
+- releasing right-click clears the held state and stops the harvest action
+
+Result:
+- resource gathering feels continuous instead of click-heavy
+- the old one-cycle behaviour still ends naturally if the node is depleted or
+  the player moves away
+
+Implementation area:
+- player.py
+- Player.handle_event(...)
+- Player.update(...)
+
+
+10. Mental model after this pass
+--------------------------------
+The world now reads more coherently in three different ways:
+- buildings sit lower and workers enter them through believable door paths
+- enemies arrive from beyond the map and respect the space occupied by
+  harvestable world resources
+- the settlement core now defines a real lose condition with a full reset loop
+
+At the interaction level, the player flow is also smoother:
+- hold right-click to keep harvesting
+- repair damaged towers from the selected-structure panel
+- reset immediately after defeat from either the overlay button or `R`
+
+
+11. Natural follow-ups
+----------------------
+1. Add separate repair support for the main base or future defensive building
+   types.
+2. Add a visible door marker or step decal on large structures so the worker
+   routing anchor is readable directly from the art.
+3. Add short repair animations or hammer effects when a tower is repaired.
+4. Add enemy spawn warning arrows at the screen edge so outside-map spawns stay
+   readable even when the markers are off-screen.
