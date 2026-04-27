@@ -50,10 +50,16 @@ class Main:
         pygame.init()
         pygame.mixer.init()   # Initialise audio subsystem for sound effects / music
 
+        window_width, window_height = choose_startup_window_size()
+        self.layout = build_display_layout(window_width, window_height)
+
         # Primary display surface – full window size.
         # Game world is rendered onto a separate surface inside Game and
         # composited here; the UI panel is drawn directly on this surface.
-        self.display_surface = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        self.display_surface = pygame.display.set_mode(
+            (self.layout.screen_width, self.layout.screen_height),
+            pygame.RESIZABLE,
+        )
         pygame.display.set_caption("Outpost Warfare")
 
         # Clock drives frame-rate capping and delta-time calculation.
@@ -66,6 +72,16 @@ class Main:
         # Instantiate the top-level game state.
         # Game.__init__ also sets self.game via back-reference.
         self.game = Game(self)
+
+    def resize_window(self, width: int, height: int) -> None:
+        """Resize the active window and notify the game about the new layout."""
+        clamped_width, clamped_height = clamp_window_size(width, height)
+        self.layout = build_display_layout(clamped_width, clamped_height)
+        self.display_surface = pygame.display.set_mode(
+            (self.layout.screen_width, self.layout.screen_height),
+            pygame.RESIZABLE,
+        )
+        self.game.on_resize(self.layout)
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -85,6 +101,10 @@ class Main:
                 if event.type == pygame.QUIT:
                     running = False
                     break
+
+                if event.type == pygame.VIDEORESIZE:
+                    self.resize_window(event.w, event.h)
+                    continue
 
                 # Keyboard shortcuts handled at the application level.
                 if event.type == pygame.KEYDOWN:

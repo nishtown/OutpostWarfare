@@ -92,6 +92,22 @@ class Camera:
         """
         self.target = target
 
+    def resize(
+        self,
+        surface_width: int,
+        surface_height: int,
+        view_width: float | None = None,
+        view_height: float | None = None,
+    ) -> None:
+        """Update the render-surface size and optionally the visible world size."""
+        self.surface_width = int(surface_width)
+        self.surface_height = int(surface_height)
+        if view_width is not None:
+            self.view_width = float(view_width)
+        if view_height is not None:
+            self.view_height = float(view_height)
+        self.offset = self._clamp_offset(self.offset)
+
     def update(self) -> None:
         """Follow the current target and clamp the view to the world bounds."""
         if self.target is None:

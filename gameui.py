@@ -53,7 +53,7 @@ GLOW_AMBER   = (255, 200, 60)
 # ── Layout constants ─────────────────────────────────────────────────────────
 # All measurements in pixels; prefixed with _ to mark them as module-private.
 _PAD         = UI_PANEL_PADDING         # uniform padding inside the panel on all sides
-_MM_H        = MINIMAP_SURFACE_HEIGHT   # height of the minimap image area
+_MM_H        = MINIMAP_SURFACE_MAX_HEIGHT   # default / maximum minimap image height
 _MM_LABEL_H  = 18    # vertical space reserved below the minimap for the label
 _SEC_HDR_H   = 26    # height of a section-divider + header row
 _BTN_COLS    = 2     # number of build-button columns
@@ -688,51 +688,7 @@ class GameUI:
     calling ``draw`` so the panel always shows current totals.
     """
 
-    def __init__(self):
-        # Panel dimensions – width from settings so changing UI_PANEL_WIDTH
-        # automatically adjusts the layout without touching this file.
-        self.panel_width  = UI_PANEL_WIDTH
-        self.panel_height = SCREEN_HEIGHT - TOP_BAR_HEIGHT
-        self.panel_x      = SCREEN_WIDTH - self.panel_width
-        self.panel_y      = TOP_BAR_HEIGHT
-        self.top_bar_rect = pygame.Rect(0, 0, SCREEN_WIDTH, TOP_BAR_HEIGHT)
-
-        px      = self.panel_x
-        py      = self.panel_y
-        inner_w = self.panel_width - _PAD * 2   # drawable width inside the panel
-
-        # ── Minimap widget ────────────────────────────────────────────────
-        # Positioned at the very top of the panel with _PAD margin on all sides.
-        self.minimap = Minimap(px + _PAD, py + _PAD, inner_w, _MM_H)
-
-        # ── Build grid layout ─────────────────────────────────────────────
-        # Divider sits below the minimap image + its label gap.
-        self._div1_y    = py + _PAD + _MM_H + _MM_LABEL_H
-        # Buttons start below the section header.
-        self._build_top = self._div1_y + _SEC_HDR_H
-
-        # Button width fills inner_w split into _BTN_COLS columns with _BTN_GAP gaps.
-        btn_w = (inner_w - (_BTN_COLS - 1) * _BTN_GAP) // _BTN_COLS
-
-        building_defs = [
-            (BUILD_DEFINITIONS[key].label, format_cost_text(BUILD_DEFINITIONS[key].cost), key)
-            for key in BUILD_MENU_ORDER
-        ]
-        self.build_rows = max(1, math.ceil(len(building_defs) / _BTN_COLS))
-        # Build the button grid, filling columns left-to-right, rows top-to-bottom.
-        self.build_buttons = []
-        for idx, (name, cost, btype) in enumerate(building_defs):
-            col = idx % _BTN_COLS
-            row = idx // _BTN_COLS
-            bx  = px + _PAD + col * (btn_w + _BTN_GAP)
-            by  = self._build_top + row * (_BTN_H + _BTN_GAP)
-            self.build_buttons.append(
-                BuildingButton(bx, by, btn_w, _BTN_H, name, cost, btype)
-            )
-
-        # y coordinate of the bottom edge of the last button row.
-        last_btn_bottom = self._build_top + self.build_rows * (_BTN_H + _BTN_GAP) - _BTN_GAP
-
+    def __init__(self, layout):
         # Current resource totals.  Write to these attributes each frame
         # (or whenever the economy ticks) to keep the display up to date.
         self.gold  = 0
@@ -743,21 +699,86 @@ class GameUI:
         # The building type string that is queued for placement, or None.
         self.selected_building = None
         self.selected_structure = None
-
-        # y coordinate where the selected-building status strip starts.
-        self._status_y = last_btn_bottom + 18
-        self._wave_button_y = self._status_y + 92
-
-        # Announcements are drawn above the main viewport rather than inside
-        # the side panel so important events stay visible during play.
-        self.announcements = AnnouncementFeed(pygame.Rect(0, TOP_BAR_HEIGHT, VIEWPORT_WIDTH, VIEWPORT_HEIGHT))
-        self.upgrade_button = Button(px + _PAD, self._wave_button_y, inner_w, 36, "Upgrade")
-        self.repair_button = Button(px + _PAD, self._wave_button_y, inner_w, 36, "Repair")
-        self.reset_button = Button(VIEWPORT_X + VIEWPORT_WIDTH // 2 - 84, VIEWPORT_Y + VIEWPORT_HEIGHT // 2 + 34, 168, 42, "Reset Outpost")
         self.next_wave_number = 1
         self.wave_timer_remaining = 10.0
         self.wave_in_progress = False
         self.game_over = False
+        self.announcements = AnnouncementFeed(pygame.Rect(0, 0, 1, 1))
+        self.build_buttons = []
+        self.upgrade_button = Button(0, 0, 1, 1, "Upgrade")
+        self.repair_button = Button(0, 0, 1, 1, "Repair")
+        self.reset_button = Button(0, 0, 168, 42, "Reset Outpost")
+        self.set_layout(layout)
+
+    def _compute_minimap_height(self, panel_height: int) -> int:
+        reserved_height = (
+            (_PAD * 2)
+            + _MM_LABEL_H
+            + _SEC_HDR_H
+            + (self.build_rows * (_BTN_H + _BTN_GAP))
+            - _BTN_GAP
+            + 18
+            + 92
+            + 42
+            + 40
+        )
+        available_height = panel_height - reserved_height
+        return max(
+            MINIMAP_SURFACE_MIN_HEIGHT,
+            min(MINIMAP_SURFACE_MAX_HEIGHT, available_height),
+        )
+
+    def set_layout(self, layout) -> None:
+        self.layout = layout
+        self.panel_width = layout.panel_width
+        self.panel_height = layout.panel_height
+        self.panel_x = layout.panel_x
+        self.panel_y = layout.panel_y
+        self.top_bar_rect = pygame.Rect(0, 0, layout.screen_width, layout.top_bar_height)
+
+        px = self.panel_x
+        py = self.panel_y
+        inner_w = self.panel_width - _PAD * 2
+        building_defs = [
+            (BUILD_DEFINITIONS[key].label, format_cost_text(BUILD_DEFINITIONS[key].cost), key)
+            for key in BUILD_MENU_ORDER
+        ]
+        self.build_rows = max(1, math.ceil(len(building_defs) / _BTN_COLS))
+        minimap_height = self._compute_minimap_height(self.panel_height)
+        self.minimap = Minimap(px + _PAD, py + _PAD, inner_w, minimap_height)
+
+        self._div1_y = py + _PAD + minimap_height + _MM_LABEL_H
+        self._build_top = self._div1_y + _SEC_HDR_H
+
+        btn_w = (inner_w - (_BTN_COLS - 1) * _BTN_GAP) // _BTN_COLS
+        self.build_buttons = []
+        for idx, (name, cost, btype) in enumerate(building_defs):
+            col = idx % _BTN_COLS
+            row = idx // _BTN_COLS
+            bx = px + _PAD + col * (btn_w + _BTN_GAP)
+            by = self._build_top + row * (_BTN_H + _BTN_GAP)
+            button = BuildingButton(bx, by, btn_w, _BTN_H, name, cost, btype)
+            button.selected = self.selected_building == btype
+            self.build_buttons.append(button)
+
+        last_btn_bottom = self._build_top + self.build_rows * (_BTN_H + _BTN_GAP) - _BTN_GAP
+        self._status_y = last_btn_bottom + 18
+        self._wave_button_y = self._status_y + 92
+        self.announcements.viewport_rect = pygame.Rect(
+            layout.viewport_x,
+            layout.viewport_y,
+            layout.viewport_width,
+            layout.viewport_height,
+        )
+        self.upgrade_button = Button(px + _PAD, self._wave_button_y, inner_w, 36, "Upgrade")
+        self.repair_button = Button(px + _PAD, self._wave_button_y, inner_w, 36, "Repair")
+        self.reset_button = Button(
+            layout.viewport_x + layout.viewport_width // 2 - 84,
+            layout.viewport_y + layout.viewport_height // 2 + 34,
+            168,
+            42,
+            "Reset Outpost",
+        )
 
     def _resource_rows(self):
         return [
@@ -1049,12 +1070,15 @@ class GameUI:
             self._draw_game_over_overlay(surface)
 
     def _draw_game_over_overlay(self, surface):
-        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
         overlay.fill((8, 6, 4, 170))
         surface.blit(overlay, (0, 0))
 
         panel_rect = pygame.Rect(0, 0, 360, 180)
-        panel_rect.center = (VIEWPORT_X + VIEWPORT_WIDTH // 2, VIEWPORT_Y + VIEWPORT_HEIGHT // 2)
+        panel_rect.center = (
+            self.layout.viewport_x + self.layout.viewport_width // 2,
+            self.layout.viewport_y + self.layout.viewport_height // 2,
+        )
         _stone_fill(surface, panel_rect, STONE_DARK)
         _bevel(surface, panel_rect, raised=True, width=3)
 

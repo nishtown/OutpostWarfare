@@ -1,0 +1,258 @@
+RESIZABLE WINDOW, DEPTH SORTING, AND BUILDING COLLISION MASKS
+=============================================================
+
+Purpose
+-------
+This document explains the pass that added:
+- a resizable game window with startup sizing based on the current display
+- a fixed-width side panel with runtime layout recomputation
+- corrected side-facing enemy sprite flipping
+- smaller building sprite rendering and a reduced building offset
+- bottom-Y world rendering order across the main scene
+- farm growth moved into the tile in front of the farm building
+- building collision derived from the lower fifth of the sprite mask
+
+
+1. Window size is now chosen from the current display
+-----------------------------------------------------
+Requirement:
+The game should choose a better startup size automatically and support smaller
+desktop resolutions than the original fixed 1536x1024 window.
+
+Current solution:
+- startup sizing now checks the current desktop resolution
+- the initial window size is chosen from that resolution instead of using a
+  hard-coded window size directly
+- the window is created with the `RESIZABLE` flag
+
+Result:
+- the game opens at a more sensible size for the current machine
+- the same build can start smaller without requiring a manual code change
+
+Implementation area:
+- settings.py
+- choose_startup_window_size(...)
+- build_display_layout(...)
+- main.py
+- Main.__init__(...)
+
+
+2. Layout is now runtime-driven instead of constant-driven
+----------------------------------------------------------
+Problem:
+The main world surface, top bar, viewport, side panel, and minimap all used
+import-time constants, which made the UI effectively fixed-size.
+
+Current solution:
+- a `DisplayLayout` object now resolves the active window geometry
+- the main game, cameras, and UI rebuild their surface sizes and rectangles
+  from the current layout
+- a resize event now recomputes the layout and updates the active game state
+
+Result:
+- the side bar keeps a fixed width while the viewport grows or shrinks with the
+  window
+- cameras and off-screen render targets stay in sync with the resized window
+
+Implementation area:
+- settings.py
+- DisplayLayout
+- clamp_window_size(...)
+- build_display_layout(...)
+- camera.py
+- Camera.resize(...)
+- main.py
+- Main.resize_window(...)
+- game.py
+- Game.on_resize(...)
+- gameui.py
+- GameUI.set_layout(...)
+
+
+3. The side bar keeps its width while the minimap adapts vertically
+---------------------------------------------------------------
+Requirement:
+The side bar should stay a fixed width, but the rest of the window should be
+allowed to resize.
+
+Current solution:
+- panel width stays fixed at the configured sidebar width
+- top bar height also stays fixed
+- the minimap height now adapts to the available vertical space in the panel
+- the lower selected-structure and wave sections still use the existing
+  conditional draw logic when vertical space becomes tight
+
+Result:
+- the panel remains stable in width
+- smaller windows preserve the core side-panel layout instead of forcing the
+  entire UI to one fixed display size
+
+Implementation area:
+- gameui.py
+- GameUI._compute_minimap_height(...)
+- GameUI.set_layout(...)
+
+
+4. Enemy side sprites now face the correct direction
+----------------------------------------------------
+Problem:
+The side-facing enemy frames were being flipped in the wrong direction, so a
+left-moving enemy appeared to be looking right and vice versa.
+
+Current solution:
+- the horizontal flip rule for side-facing enemies was reversed
+
+Result:
+- enemies now face the direction they are actually moving when using the side
+  animation sheets
+
+Implementation area:
+- enemy.py
+- Enemy._set_animation_direction(...)
+
+
+5. Main-scene draw order is now based on bottom Y
+-------------------------------------------------
+Requirement:
+Objects with a larger bottom Y should render on top of objects behind them.
+
+Current solution:
+- the main render path now collects the scene objects into one list
+- objects are sorted by collision-bottom Y before drawing
+- this list includes resource nodes, structures, enemies, and the player
+- projectiles still render afterward as a separate overlay layer
+
+Result:
+- the scene now behaves more like a depth-sorted top-down game
+- front-most actors render over actors behind them based on where they touch
+  the ground, not based on object type or insertion order
+
+Implementation area:
+- game.py
+- Game._scene_sort_key(...)
+- Game._draw_scene_object(...)
+- Game._render_world(...)
+
+
+6. Building sprites are rendered at 0.75x size
+----------------------------------------------
+Requirement:
+The building art should be scaled down.
+
+Current solution:
+- loaded building sprites are scaled to 75% of their original imported size
+- the scaled result is cached, so the resize work is only done once per sprite
+  variant
+
+Result:
+- the buildings occupy less screen space visually
+- the reduced size also makes the new lower-footprint collision read more
+  naturally
+
+Implementation area:
+- world_objects.py
+- Structure._BUILDING_SPRITE_SCALE
+- Structure._load_building_sprite(...)
+
+
+7. Building offsets were reduced by 8 pixels
+--------------------------------------------
+Requirement:
+The recent building offset was sitting too close to the grid line and needed to
+come back slightly.
+
+Current solution:
+- the lowered building render offsets were changed from 32 pixels to 24 pixels
+
+Result:
+- buildings still sit lower than their original placement, but they no longer
+  ride directly on the line
+
+Implementation area:
+- world_objects.py
+- STRUCTURE_RENDER_OFFSETS
+
+
+8. Farm growth now appears in front of the farm building
+--------------------------------------------------------
+Requirement:
+The farmed area should grow in the tile in front of the farm instead of around
+the building footprint.
+
+Current solution:
+- farm plot offsets were moved into a forward cluster below the building
+
+Result:
+- the building reads more clearly as the structure tile
+- the visible crop growth now reads as the front field tile
+
+Implementation area:
+- world_objects.py
+- Structure._FARM_PLOT_OFFSETS
+
+
+9. Building collision now uses the lower fifth of the sprite mask
+-----------------------------------------------------------------
+Requirement:
+Buildings should only collide near their grounded lower edge so the player can
+move behind the upper visual mass of the sprite more naturally.
+
+Current solution:
+- building collision is now derived from the sprite's opaque bounds
+- only the lower fifth of that opaque region is kept as the collision area
+- this collision area is anchored to the sprite's world-space bottom instead of
+  staying as a centred generic rectangle
+- placement previews and live structure collisions both use the same mask-based
+  footprint
+
+Result:
+- buildings feel much less like full-body invisible boxes
+- walking behind tall structures is more believable because only the grounded
+  base blocks movement
+- placement, pathing, and selection all use the same grounded footprint model
+
+Implementation area:
+- world_objects.py
+- Structure._get_collision_mask_local_rect(...)
+- Structure.get_collision_rect(...)
+- Structure.get_preview_collision_rect(...)
+- WorldObjectManager._structure_rect(...)
+
+
+10. Structure picking now follows depth order better
+----------------------------------------------------
+Problem:
+When two large structures overlap visually, selection based only on reverse
+insertion order does not match the actual draw order.
+
+Current solution:
+- structure picking now checks structures in descending collision-bottom order
+
+Result:
+- clicking overlapping tall structures is more likely to select the one that is
+  visually in front
+
+Implementation area:
+- world_objects.py
+- WorldObjectManager.find_structure_at_world(...)
+
+
+11. Mental model after this pass
+--------------------------------
+The current scene is now more coherent in three different ways:
+- the window and UI geometry adapt to the machine instead of assuming one fixed
+  desktop size
+- world rendering behaves like a proper depth-sorted top-down scene
+- building art, collision, and placement now line up around the grounded base
+  of the sprite instead of a generic centred rectangle
+
+That combination makes the game feel less prototype-like without changing the
+existing core systems for harvesting, towers, or waves.
+
+
+12. Natural follow-ups
+----------------------
+1. Add a visible placement ghost that uses the same mask-based collision shape.
+2. Add resize-aware font scaling or compact UI variants for very small windows.
+3. Add a dedicated draw-order helper on each world object type if the scene
+   later needs exceptions beyond simple bottom-Y sorting.

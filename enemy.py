@@ -33,7 +33,7 @@ import pygame
 from pygame import Vector2
 
 from entity import Entity
-from settings import BLACK, FONT_SMALL, GOLD, RED, TILE_SIZE, WHITE, WORLD_HEIGHT, WORLD_WIDTH
+from settings import BLACK, FONT_SMALL, GOLD, RED, TILE_SIZE, WHITE
 
 
 @dataclass(frozen=True)
@@ -342,7 +342,7 @@ class Enemy(Entity):
 
         if abs(direction.x) > abs(direction.y):
             self.animation_direction = "side"
-            self.flip_x = direction.x < 0
+            self.flip_x = direction.x > 0
         elif direction.y < 0:
             self.animation_direction = "up"
             self.flip_x = False
@@ -545,12 +545,15 @@ class EnemyDirector:
                 self.start_next_wave()
 
     def draw(self, surface: pygame.Surface, camera) -> None:
+        self.draw_overlays(surface, camera)
+        for enemy in self.enemies:
+            enemy.draw(surface, camera)
+
+    def draw_overlays(self, surface: pygame.Surface, camera) -> None:
         self._draw_spawn_points(surface, camera)
         self._draw_base(surface, camera)
         if self.main.debug_mode:
             self._draw_paths(surface, camera)
-        for enemy in self.enemies:
-            enemy.draw(surface, camera)
 
     def _announce(self, text: str, accent=GOLD, duration: float = 3.0, key=None, cooldown: float = 0.0) -> None:
         if callable(self.announce_callback):
@@ -613,18 +616,20 @@ class EnemyDirector:
         candidates: list[tuple[str, tuple[int, int], Vector2]] = []
         seen_tiles: set[tuple[int, int]] = set()
         tile_size = self.world.tile_size
+        world_width = int(self.world.world_width)
+        world_height = int(self.world.world_height)
 
         for margin_tiles in range(self._MAX_EDGE_SEARCH_MARGINS + 1):
             top_y = margin_tiles * tile_size + tile_size / 2
-            bottom_y = WORLD_HEIGHT - margin_tiles * tile_size - tile_size / 2
+            bottom_y = world_height - margin_tiles * tile_size - tile_size / 2
             left_x = margin_tiles * tile_size + tile_size / 2
-            right_x = WORLD_WIDTH - margin_tiles * tile_size - tile_size / 2
+            right_x = world_width - margin_tiles * tile_size - tile_size / 2
 
-            for world_x in range(tile_size // 2, WORLD_WIDTH, tile_size):
+            for world_x in range(tile_size // 2, world_width, tile_size):
                 self._append_edge_candidate(candidates, seen_tiles, "north", world_x, top_y)
                 self._append_edge_candidate(candidates, seen_tiles, "south", world_x, bottom_y)
 
-            for world_y in range(tile_size // 2, WORLD_HEIGHT, tile_size):
+            for world_y in range(tile_size // 2, world_height, tile_size):
                 self._append_edge_candidate(candidates, seen_tiles, "west", left_x, world_y)
                 self._append_edge_candidate(candidates, seen_tiles, "east", right_x, world_y)
 
@@ -747,14 +752,16 @@ class EnemyDirector:
     def _outside_spawn_position(self, side: str, tile_coord: tuple[int, int]) -> Vector2:
         tile_center = self._tile_to_world(tile_coord)
         offset = self.world.tile_size * 0.75
+        world_width = self.world.world_width
+        world_height = self.world.world_height
 
         if side == "north":
             return Vector2(tile_center.x, -offset)
         if side == "south":
-            return Vector2(tile_center.x, WORLD_HEIGHT + offset)
+            return Vector2(tile_center.x, world_height + offset)
         if side == "west":
             return Vector2(-offset, tile_center.y)
-        return Vector2(WORLD_WIDTH + offset, tile_center.y)
+        return Vector2(world_width + offset, tile_center.y)
 
     def _blocked_resource_tiles(self) -> set[tuple[int, int]]:
         world_objects = getattr(getattr(self.main, "game", None), "world_objects", None)

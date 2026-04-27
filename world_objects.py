@@ -52,12 +52,12 @@ RESOURCE_TERRAIN_RULES = {
     "gold": {"grass", "forest", "sand"},
 }
 STRUCTURE_RENDER_OFFSETS = {
-    "farm": 32,
-    "lumberyard": 32,
-    "stone_quarry": 32,
-    "gold_quarry": 32,
-    "arrow_tower": 32,
-    "main_base": 32,
+    "farm": 24,
+    "lumberyard": 24,
+    "stone_quarry": 24,
+    "gold_quarry": 24,
+    "arrow_tower": 24,
+    "main_base": 24,
 }
 RESOURCE_CLUSTER_MAX = 5
 TOWER_UPGRADE_LEVELS = {
@@ -233,6 +233,8 @@ class Structure(Entity):
     """One placed structure, wall, tower, or trap."""
 
     _BUILDING_SPRITE_CACHE: dict[str, pygame.Surface] = {}
+    _BUILDING_COLLISION_CACHE: dict[str, pygame.Rect] = {}
+    _BUILDING_SPRITE_SCALE = 0.75
     _WORKER_SPRITE_CACHE: list[pygame.Surface] = []
     _WORKER_RENDER_SIZE = (12, 18)
     _LUMBERYARD_WORKER_COUNT = 2
@@ -250,11 +252,11 @@ class Structure(Entity):
     _FARM_READY_TIME = 3.0
     _FARM_FOOD_PER_PLOT = 2
     _FARM_PLOT_OFFSETS = (
-        Vector2(-70, 22),
-        Vector2(-35, 34),
-        Vector2(0, 40),
-        Vector2(35, 34),
-        Vector2(70, 22),
+        Vector2(-22, TILE_SIZE * 0.78),
+        Vector2(0, TILE_SIZE * 0.74),
+        Vector2(22, TILE_SIZE * 0.8),
+        Vector2(-12, TILE_SIZE * 0.98),
+        Vector2(12, TILE_SIZE * 1.02),
     )
     _WORKER_DOOR_OFFSET_Y = 24.0
     _WORKER_EXIT_OFFSET_Y = 54.0
@@ -279,8 +281,12 @@ class Structure(Entity):
         self.definition = definition
         self.original_image = image
         self.image = image.copy()
-        self.collision_size = _footprint_for_key(definition.key)
         self.sprite_offset_y = STRUCTURE_RENDER_OFFSETS.get(definition.key, 0)
+        self.collision_mask_rect = self._get_collision_mask_local_rect(definition, level=1)
+        if self.collision_mask_rect is not None:
+            self.collision_size = self.collision_mask_rect.size
+        else:
+            self.collision_size = _footprint_for_key(definition.key)
 
         self.max_health = definition.max_health
         self.health = definition.max_health
@@ -437,9 +443,14 @@ class Structure(Entity):
             pygame.draw.rect(surface, RED, camera.world_rect_to_screen(self.get_collision_rect()), 1)
 
     def get_sprite_world_rect(self) -> pygame.Rect:
-        draw_rect = self.image.get_rect()
-        draw_rect.midbottom = (int(self.pos.x), int(self.pos.y + self.sprite_offset_y))
-        return draw_rect
+        return self._sprite_world_rect_for_position(self.pos)
+
+    def get_collision_rect(self, pos=None) -> pygame.Rect:
+        position = Vector2(pos) if pos is not None else self.pos
+        if self.collision_mask_rect is not None:
+            sprite_rect = self._sprite_world_rect_for_position(position)
+            return self.collision_mask_rect.move(sprite_rect.x, sprite_rect.y)
+        return super().get_collision_rect(position)
 
     def contains_world_point(self, world_position) -> bool:
         point = (int(world_position.x), int(world_position.y))
@@ -471,6 +482,11 @@ class Structure(Entity):
 
     def _uses_workers(self) -> bool:
         return self.worker_resource_key is not None or self.definition.key == "farm"
+
+    def _sprite_world_rect_for_position(self, position) -> pygame.Rect:
+        draw_rect = self.image.get_rect()
+        draw_rect.midbottom = (int(position.x), int(position.y + self.sprite_offset_y))
+        return draw_rect
 
     def get_worker_door_position(self) -> Vector2:
         door_offset = self.sprite_offset_y if self.sprite_offset_y > 0 else self._WORKER_DOOR_OFFSET_Y
@@ -971,6 +987,11 @@ class Structure(Entity):
 
         self.image = self._build_surface(self.definition, level=self.level)
         self.original_image = self.image.copy()
+        self.collision_mask_rect = self._get_collision_mask_local_rect(self.definition, level=self.level)
+        if self.collision_mask_rect is not None:
+            self.collision_size = self.collision_mask_rect.size
+        else:
+            self.collision_size = _footprint_for_key(self.definition.key)
         self.rect = self.image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
 
     def _get_level_data(self):
@@ -1073,8 +1094,65 @@ class Structure(Entity):
         if image is None:
             return None
 
+        scaled_size = (
+            max(1, int(round(image.get_width() * cls._BUILDING_SPRITE_SCALE))),
+            max(1, int(round(image.get_height() * cls._BUILDING_SPRITE_SCALE))),
+        )
+        if scaled_size != image.get_size():
+            image = pygame.transform.smoothscale(image, scaled_size)
+
         cls._BUILDING_SPRITE_CACHE[cache_key] = image
         return image.copy()
+
+    @classmethod
+    def _get_collision_mask_local_rect(cls, definition: BuildDefinition, level: int = 1) -> pygame.Rect | None:
+        if definition.key in {"wall", "spike_trap"}:
+            return None
+
+        cache_key = f"{definition.key}:{level}:collision"
+        if cache_key in cls._BUILDING_COLLISION_CACHE:
+            return cls._BUILDING_COLLISION_CACHE[cache_key].copy()
+
+        image = cls._load_building_sprite(definition, level=level)
+        if image is None:
+            return None
+
+        opaque_bounds = image.get_bounding_rect(min_alpha=1)
+        if opaque_bounds.width <= 0 or opaque_bounds.height <= 0:
+            return None
+
+        lower_band_height = max(1, math.ceil(opaque_bounds.height / 5))
+        lower_band = pygame.Rect(
+            opaque_bounds.x,
+            opaque_bounds.bottom - lower_band_height,
+            opaque_bounds.width,
+            lower_band_height,
+        )
+        lower_band_surface = image.subsurface(lower_band).copy()
+        lower_band_bounds = lower_band_surface.get_bounding_rect(min_alpha=1)
+        if lower_band_bounds.width <= 0 or lower_band_bounds.height <= 0:
+            collision_rect = pygame.Rect(opaque_bounds)
+        else:
+            collision_rect = lower_band_bounds.move(lower_band.topleft)
+
+        cls._BUILDING_COLLISION_CACHE[cache_key] = collision_rect.copy()
+        return collision_rect.copy()
+
+    @classmethod
+    def get_preview_collision_rect(cls, definition: BuildDefinition, position, level: int = 1) -> pygame.Rect:
+        local_collision_rect = cls._get_collision_mask_local_rect(definition, level=level)
+        if local_collision_rect is None:
+            rect = pygame.Rect(0, 0, *_footprint_for_key(definition.key))
+            rect.center = (int(position.x), int(position.y))
+            return rect
+
+        preview_image = cls._load_building_sprite(definition, level=level)
+        draw_rect = preview_image.get_rect()
+        draw_rect.midbottom = (
+            int(position.x),
+            int(position.y + STRUCTURE_RENDER_OFFSETS.get(definition.key, 0)),
+        )
+        return local_collision_rect.move(draw_rect.x, draw_rect.y)
 
 
 class ResourceNode(Entity):
@@ -1364,7 +1442,12 @@ class WorldObjectManager:
 
     def find_structure_at_world(self, world_position):
         point = Vector2(world_position)
-        for structure in reversed(self.structures):
+        structures_by_depth = sorted(
+            self.structures,
+            key=lambda structure: structure.get_collision_rect().bottom,
+            reverse=True,
+        )
+        for structure in structures_by_depth:
             if not structure.alive:
                 continue
             if structure.contains_world_point(point):
@@ -1645,9 +1728,7 @@ class WorldObjectManager:
         return True
 
     def _structure_rect(self, position, definition: BuildDefinition) -> pygame.Rect:
-        rect = pygame.Rect(0, 0, *_footprint_for_key(definition.key))
-        rect.center = (int(position.x), int(position.y))
-        return rect
+        return Structure.get_preview_collision_rect(definition, position)
 
     def _tile_coord(self, position) -> tuple[int, int]:
         pos = Vector2(position)

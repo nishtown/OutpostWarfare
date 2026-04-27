@@ -16,6 +16,7 @@ Sections
 """
 
 import os
+from dataclasses import dataclass
 import pygame
 
 # ── Initialise pygame early so font creation below succeeds ──────────────────
@@ -38,21 +39,114 @@ def asset_path(*parts):
 
 
 # ── Display ───────────────────────────────────────────────────────────────────
-SCREEN_WIDTH  = 1536   # Total window width  (pixels)
-SCREEN_HEIGHT = 1024   # Total window height (pixels)
+DEFAULT_SCREEN_WIDTH  = 1536   # Preferred window width  (pixels)
+DEFAULT_SCREEN_HEIGHT = 1024   # Preferred window height (pixels)
 
 # Width of the right-hand side UI panel (minimap + build menu + resources).
 # Changing this constant automatically adjusts VIEWPORT_WIDTH.
 UI_PANEL_WIDTH = 300
 UI_PANEL_PADDING = 8
 TOP_BAR_HEIGHT = 56
+MIN_VIEWPORT_WIDTH = 640
+MIN_WINDOW_WIDTH = UI_PANEL_WIDTH + MIN_VIEWPORT_WIDTH
+MIN_WINDOW_HEIGHT = 720
+UI_PANEL_MIN_HEIGHT = MIN_WINDOW_HEIGHT - TOP_BAR_HEIGHT
+MINIMAP_SURFACE_MIN_HEIGHT = 96
+MINIMAP_SURFACE_MAX_HEIGHT = 190
+STARTUP_WINDOW_MARGIN_X = 120
+STARTUP_WINDOW_MARGIN_Y = 120
+
+
+@dataclass(frozen=True)
+class DisplayLayout:
+    """Resolved window and viewport geometry for the current frame size."""
+
+    screen_width: int
+    screen_height: int
+    panel_width: int
+    panel_height: int
+    panel_x: int
+    panel_y: int
+    top_bar_height: int
+    viewport_x: int
+    viewport_y: int
+    viewport_width: int
+    viewport_height: int
+
+
+def clamp_window_size(width: int, height: int) -> tuple[int, int]:
+    """Clamp the requested window size to the supported minimum UI footprint."""
+    return (
+        max(MIN_WINDOW_WIDTH, int(width)),
+        max(MIN_WINDOW_HEIGHT, int(height)),
+    )
+
+
+def get_display_resolution() -> tuple[int, int]:
+    """Return the current desktop resolution, with a safe fallback."""
+    try:
+        desktop_sizes = pygame.display.get_desktop_sizes()
+        if desktop_sizes:
+            return desktop_sizes[0]
+    except (AttributeError, pygame.error):
+        pass
+
+    try:
+        display_info = pygame.display.Info()
+        if display_info.current_w > 0 and display_info.current_h > 0:
+            return display_info.current_w, display_info.current_h
+    except pygame.error:
+        pass
+
+    return DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT
+
+
+def choose_startup_window_size() -> tuple[int, int]:
+    """Pick a sensible initial window size based on the current display."""
+    display_width, display_height = get_display_resolution()
+    target_width = min(
+        DEFAULT_SCREEN_WIDTH,
+        max(MIN_WINDOW_WIDTH, display_width - STARTUP_WINDOW_MARGIN_X),
+    )
+    target_height = min(
+        DEFAULT_SCREEN_HEIGHT,
+        max(MIN_WINDOW_HEIGHT, display_height - STARTUP_WINDOW_MARGIN_Y),
+    )
+    return clamp_window_size(target_width, target_height)
+
+
+def build_display_layout(screen_width: int, screen_height: int) -> DisplayLayout:
+    """Resolve the current panel and viewport rectangles from a window size."""
+    screen_width, screen_height = clamp_window_size(screen_width, screen_height)
+    panel_width = UI_PANEL_WIDTH
+    panel_height = max(UI_PANEL_MIN_HEIGHT, screen_height - TOP_BAR_HEIGHT)
+    viewport_width = max(1, screen_width - panel_width)
+    viewport_height = max(1, panel_height)
+    return DisplayLayout(
+        screen_width=screen_width,
+        screen_height=screen_height,
+        panel_width=panel_width,
+        panel_height=panel_height,
+        panel_x=screen_width - panel_width,
+        panel_y=TOP_BAR_HEIGHT,
+        top_bar_height=TOP_BAR_HEIGHT,
+        viewport_x=0,
+        viewport_y=TOP_BAR_HEIGHT,
+        viewport_width=viewport_width,
+        viewport_height=viewport_height,
+    )
+
+
+DEFAULT_LAYOUT = build_display_layout(*choose_startup_window_size())
+SCREEN_WIDTH = DEFAULT_LAYOUT.screen_width
+SCREEN_HEIGHT = DEFAULT_LAYOUT.screen_height
 
 # The portion of the window used for rendering the game world.
 # This is the area to the LEFT of the UI panel.
 VIEWPORT_X = 0
 VIEWPORT_Y = TOP_BAR_HEIGHT
-VIEWPORT_WIDTH  = SCREEN_WIDTH - UI_PANEL_WIDTH   # 1236 px
-VIEWPORT_HEIGHT = SCREEN_HEIGHT - TOP_BAR_HEIGHT
+VIEWPORT_WIDTH  = DEFAULT_LAYOUT.viewport_width
+VIEWPORT_HEIGHT = DEFAULT_LAYOUT.viewport_height
 
 # The overall world is larger than the main viewport so the camera has room
 # to move and the minimap can show a broader local region.
@@ -66,7 +160,7 @@ WORLD_SEED = 20260426
 # The minimap uses its own camera and its own render surface. Its surface size
 # matches the pixel area reserved for the map inside the UI panel.
 MINIMAP_SURFACE_WIDTH = UI_PANEL_WIDTH - UI_PANEL_PADDING * 2
-MINIMAP_SURFACE_HEIGHT = 190
+MINIMAP_SURFACE_HEIGHT = MINIMAP_SURFACE_MAX_HEIGHT
 
 # How much wider the minimap camera's world view is compared to the main view.
 # A value above 1.0 means the minimap shows more area than the player can see

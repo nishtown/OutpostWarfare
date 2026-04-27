@@ -45,42 +45,43 @@ class Game:
 
     def __init__(self, main):
         self.main = main
+        self.layout = main.layout
 
         # Back-reference so other objects can reach Game through main.game.
         self.main.game = self
 
-        # ── Render targets ────────────────────────────────────────────────
-        # Main camera render target: this is the surface blitted into the left
-        # side of the game window every frame.
-        self.world_surface = pygame.Surface((VIEWPORT_WIDTH, VIEWPORT_HEIGHT))
-
-        # Minimap render target: smaller than the main world surface, but its
-        # camera sees a wider range of world space.
-        self.minimap_surface = pygame.Surface(
-            (MINIMAP_SURFACE_WIDTH, MINIMAP_SURFACE_HEIGHT)
-        )
-
         # ── UI panel ──────────────────────────────────────────────────────
-        self.ui = GameUI()
+        self.ui = GameUI(self.layout)
         self.selected_structure = None
         self.game_over = False
+
+        world_width = self.layout.viewport_width * 3
+        world_height = self.layout.viewport_height * 3
 
         # ── World generation ──────────────────────────────────────────────
         # The generated world is deterministic: the same WORLD_SEED always
         # produces the same terrain layout.
         self.world = WorldGenerator(
-            WORLD_WIDTH,
-            WORLD_HEIGHT,
+            world_width,
+            world_height,
             tile_size=TILE_SIZE,
             seed=WORLD_SEED,
         )
+
+        # ── Render targets ────────────────────────────────────────────────
+        # Main camera render target: this is the surface blitted into the left
+        # side of the game window every frame.
+        self.world_surface = pygame.Surface((self.layout.viewport_width, self.layout.viewport_height))
+
+        minimap_width, minimap_height = self.ui.minimap.rect.size
+        self.minimap_surface = pygame.Surface((minimap_width, minimap_height))
 
         # ── Base anchor ──────────────────────────────────────────────────
         # The tower-defence prototype uses a fixed base near the middle of the
         # map. We snap it to a nearby traversable tile so both the player and
         # enemy pathing start from valid ground even if the exact centre lands
         # on water or rock for a future seed.
-        center_guess = Vector2(WORLD_WIDTH / 2, WORLD_HEIGHT / 2)
+        center_guess = Vector2(self.world.world_width / 2, self.world.world_height / 2)
         self.base_position = (
             self.world.find_nearest_traversable(center_guess.x, center_guess.y, max_radius_tiles=10)
             or center_guess
@@ -108,20 +109,22 @@ class Game:
         )
 
         # ── Cameras ───────────────────────────────────────────────────────
+        minimap_view_width = int(self.layout.viewport_width * MINIMAP_VIEW_MULTIPLIER)
+        minimap_view_height = int(minimap_view_width * minimap_height / max(1, minimap_width))
         self.camera = Camera(
-            WORLD_WIDTH,
-            WORLD_HEIGHT,
-            VIEWPORT_WIDTH,
-            VIEWPORT_HEIGHT,
+            self.world.world_width,
+            self.world.world_height,
+            self.layout.viewport_width,
+            self.layout.viewport_height,
             name="main",
         )
         self.minimap_camera = Camera(
-            WORLD_WIDTH,
-            WORLD_HEIGHT,
-            MINIMAP_SURFACE_WIDTH,
-            MINIMAP_SURFACE_HEIGHT,
-            view_width=MINIMAP_VIEW_WIDTH,
-            view_height=MINIMAP_VIEW_HEIGHT,
+            self.world.world_width,
+            self.world.world_height,
+            minimap_width,
+            minimap_height,
+            view_width=minimap_view_width,
+            view_height=minimap_view_height,
             name="minimap",
         )
         self.camera.set_target(self.player)
@@ -130,6 +133,30 @@ class Game:
         # Static landmarks sit on top of the generated terrain so camera motion
         # and map readability remain strong while the project is still early.
         self.landmarks = []
+
+    def on_resize(self, layout) -> None:
+        """Resize render targets, cameras, and UI to match a new window size."""
+        self.layout = layout
+        self.ui.set_layout(layout)
+        self.world_surface = pygame.Surface((layout.viewport_width, layout.viewport_height))
+        minimap_width, minimap_height = self.ui.minimap.rect.size
+        self.minimap_surface = pygame.Surface((minimap_width, minimap_height))
+        self.camera.resize(
+            layout.viewport_width,
+            layout.viewport_height,
+            view_width=layout.viewport_width,
+            view_height=layout.viewport_height,
+        )
+        minimap_view_width = int(layout.viewport_width * MINIMAP_VIEW_MULTIPLIER)
+        minimap_view_height = int(minimap_view_width * minimap_height / max(1, minimap_width))
+        self.minimap_camera.resize(
+            minimap_width,
+            minimap_height,
+            view_width=minimap_view_width,
+            view_height=minimap_view_height,
+        )
+        self.camera.update()
+        self.minimap_camera.update()
 
     # ── Event handling ────────────────────────────────────────────────────────
 
@@ -234,7 +261,7 @@ class Game:
         ]
 
         for world_x, world_y in corners:
-            if not (0 <= world_x < WORLD_WIDTH and 0 <= world_y < WORLD_HEIGHT):
+            if not (0 <= world_x < self.world.world_width and 0 <= world_y < self.world.world_height):
                 return False
             if not self.world.is_traversable_at_world(world_x, world_y):
                 return False
@@ -275,15 +302,15 @@ class Game:
     def _screen_to_world(self, screen_pos) -> Vector2:
         screen_x, screen_y = screen_pos
         return Vector2(
-            self.camera.offset.x + (screen_x - VIEWPORT_X) / self.camera.scale_x,
-            self.camera.offset.y + (screen_y - VIEWPORT_Y) / self.camera.scale_y,
+            self.camera.offset.x + (screen_x - self.layout.viewport_x) / self.camera.scale_x,
+            self.camera.offset.y + (screen_y - self.layout.viewport_y) / self.camera.scale_y,
         )
 
     def _is_world_screen_position(self, screen_pos) -> bool:
         screen_x, screen_y = screen_pos
         return (
-            VIEWPORT_X <= screen_x < VIEWPORT_X + VIEWPORT_WIDTH
-            and VIEWPORT_Y <= screen_y < VIEWPORT_Y + VIEWPORT_HEIGHT
+            self.layout.viewport_x <= screen_x < self.layout.viewport_x + self.layout.viewport_width
+            and self.layout.viewport_y <= screen_y < self.layout.viewport_y + self.layout.viewport_height
         )
 
     def _draw_landmarks(self, surface, camera, show_labels=False):
@@ -318,28 +345,45 @@ class Game:
     def reset(self):
         self.__init__(self.main)
 
+    def _scene_sort_key(self, obj) -> tuple[int, int]:
+        if hasattr(obj, "get_collision_rect"):
+            collision_rect = obj.get_collision_rect()
+            return collision_rect.bottom, collision_rect.centerx
+        position = getattr(obj, "pos", Vector2())
+        return int(position.y), int(position.x)
+
+    def _draw_scene_object(self, surface, camera, obj) -> None:
+        if obj is self.player:
+            self.player.draw(surface, camera)
+            return
+
+        if hasattr(obj, "tier"):
+            obj.draw(surface, camera)
+            return
+
+        if hasattr(obj, "definition") and hasattr(obj, "sprite_offset_y"):
+            obj.draw(surface, camera, selected=obj is self.selected_structure)
+            return
+
+        obj.draw(surface, camera)
+
     def _render_world(self, surface, camera, show_labels=False):
         """Render the world into *surface* from the perspective of *camera*."""
         self.world.draw(surface, camera)
         self._draw_landmarks(surface, camera, show_labels=show_labels)
-        occlusion_target = self.player if getattr(camera, "name", "") == "main" else None
-        self.world_objects.draw(
-            surface,
-            camera,
-            occlusion_target=occlusion_target,
-            selected_structure=self.selected_structure,
-            overlay_pass=False,
-        )
-        self.enemy_director.draw(surface, camera)
+        self.enemy_director.draw_overlays(surface, camera)
+
+        scene_objects = [
+            *[node for node in self.world_objects.resource_nodes if node.alive],
+            *[structure for structure in self.world_objects.structures if structure.alive],
+            *[enemy for enemy in self.enemy_director.enemies if enemy.alive or enemy.death_animation_active],
+            self.player,
+        ]
+        scene_objects.sort(key=self._scene_sort_key)
+        for scene_object in scene_objects:
+            self._draw_scene_object(surface, camera, scene_object)
+
         self.world_objects.draw_projectiles(surface, camera)
-        self.player.draw(surface, camera)
-        self.world_objects.draw(
-            surface,
-            camera,
-            occlusion_target=occlusion_target,
-            selected_structure=self.selected_structure,
-            overlay_pass=True,
-        )
 
         if self.main.debug_mode and show_labels:
             debug_text = FONT_SMALL.render(
@@ -379,7 +423,7 @@ class Game:
         self._render_world(self.minimap_surface, self.minimap_camera)
 
         # ── Step 2: composite the main camera surface onto the display ────
-        screen.blit(self.world_surface, (VIEWPORT_X, VIEWPORT_Y))
+        screen.blit(self.world_surface, (self.layout.viewport_x, self.layout.viewport_y))
 
         # ── Step 3: draw the UI using the wider minimap camera surface ────
         self.ui.draw(
