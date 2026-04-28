@@ -299,7 +299,7 @@ class Structure(Entity):
     _BUILDING_COLLISION_CACHE: dict[str, pygame.Rect] = {}
     _BUILDING_SPRITE_SCALE = 0.75
     _WORKER_ANIMATION_CACHE: dict[tuple[str, str, str], tuple[pygame.Surface, ...]] = {}
-    _WORKER_RENDER_SIZE = (18, 28)
+    _WORKER_RENDER_SIZE = (48, 48)
     _WORKER_ANIMATION_DIRECTION_CODES = {
         "down": "D",
         "side": "S",
