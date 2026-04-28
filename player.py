@@ -84,11 +84,13 @@ class Player(Entity):
     }
     _ANIMATION_ACTION_NAMES = {
         "idle": "Idle",
-        "preattack": "Preattack",
-        "attack": "Attack",
+        "walk": "Walk",
+        "preattack": "Special",
+        "attack": "Special",
     }
     _ANIMATION_FRAME_DURATIONS = {
         "idle": 0.18,
+        "walk": 0.12,
         "preattack": 0.08,
         "attack": 0.08,
     }
@@ -356,7 +358,9 @@ class Player(Entity):
         else:
             if self.is_moving:
                 self._set_animation_direction(move)
-            self._update_animation("idle", dt)
+                self._update_animation("walk", dt)
+            else:
+                self._update_animation("idle", dt)
 
         # ── 4. Harvest tick (moving cancels it) ────────────────────────────
         if self.is_moving and self.harvest_action is not None:

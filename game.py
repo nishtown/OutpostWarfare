@@ -332,11 +332,12 @@ class Game:
                 continue
 
             click_distance = enemy.pos.distance_to(clicked)
-            if click_distance > 40.0:
+            click_radius = max(52.0, float(getattr(enemy, "attack_radius", 8)) + 20.0)
+            if click_distance > click_radius:
                 continue
 
             player_distance = enemy.pos.distance_to(self.player.pos)
-            clicked_candidates.append((click_distance, player_distance, enemy))
+            clicked_candidates.append((click_distance / click_radius, player_distance, enemy))
 
         if not clicked_candidates:
             return False

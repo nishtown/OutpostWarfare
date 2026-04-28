@@ -34,7 +34,7 @@ BUILDING_SPRITE_PATHS = {
     "gold_quarry": ("assets", "buildings", "goldmine", "4.png"),
     "main_base": ("assets", "buildings", "towncentre", "1.png"),
 }
-WORKER_VARIANTS = ("1", "2", "3", "4")
+WORKER_VARIANTS = ("1", "3", "4")
 ARCHER_TOWER_STAGE_1_SHEET = ("assets", "buildings", "archertower", "2.png")
 ARCHER_TOWER_STAGE_1_FRAME_INDEX = 1
 ARCHER_TOWER_STAGE_FRAME_COUNT = 4
