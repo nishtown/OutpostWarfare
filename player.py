@@ -439,7 +439,7 @@ class Player(Entity):
 
         if abs(direction.x) > abs(direction.y):
             self.animation_direction = "side"
-            self.flip_x = direction.x < 0
+            self.flip_x = direction.x > 0
         elif direction.y < 0:
             self.animation_direction = "up"
             self.flip_x = False

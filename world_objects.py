@@ -970,7 +970,7 @@ class Structure(Entity):
             worker["flip_x"] = False
         else:
             worker["animation_direction"] = "side"
-            worker["flip_x"] = direction.x < -0.5
+            worker["flip_x"] = direction.x > 0.5
 
         step = min(distance, self._LUMBERYARD_WORKER_SPEED * dt)
         worker["pos"] += direction.normalize() * step
@@ -1546,25 +1546,6 @@ class ResourceNode(Entity):
 
     @classmethod
     def _build_surface(cls, definition: ResourceNodeDefinition) -> pygame.Surface:
-        if definition.key in {"rock", "gold"}:
-            sprite_index = random.randint(1, 6)
-            cache_key = (definition.key, sprite_index)
-            if cache_key not in cls._ROCK_SPRITE_CACHE:
-                image = Entity.load_image(
-                    "assets", "rocks", f"{sprite_index}.png",
-                    fallback_size=(46, 46),
-                    fallback_color=(118, 118, 118),
-                )
-                if image.get_size() != (46, 46):
-                    image = pygame.transform.smoothscale(image, (46, 46))
-                if definition.key == "gold":
-                    image = image.copy()
-                    tint_surface = pygame.Surface(image.get_size(), pygame.SRCALPHA)
-                    tint_surface.fill((224, 188, 76, 255))
-                    image.blit(tint_surface, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
-                cls._ROCK_SPRITE_CACHE[cache_key] = image
-            return cls._ROCK_SPRITE_CACHE[cache_key].copy()
-
         surface = pygame.Surface((46, 46), pygame.SRCALPHA)
 
         if definition.key == "tree":
@@ -1588,8 +1569,9 @@ class ResourceNode(Entity):
 class ArrowProjectile:
     """Simple projectile fired by an arrow tower."""
 
-    _SPRITE_CACHE: dict[int, pygame.Surface] = {}
-    _SPRITE_VARIANT_COUNT = 27
+    _BASE_SPRITE_CACHE: dict[int, pygame.Surface] = {}
+    _SPRITE_CACHE: dict[tuple[int, bool, bool, int], pygame.Surface] = {}
+    _BASE_SPRITE_COUNT = 13
 
     def __init__(self, position: Vector2, target, damage: float, speed: float) -> None:
         self.pos = Vector2(position)
@@ -1645,19 +1627,47 @@ class ArrowProjectile:
     def _get_sprite_for_heading(cls, heading: Vector2) -> pygame.Surface | None:
         if heading.length_squared() <= 0.0001:
             sprite_index = 1
+            flip_x = False
+            flip_y = False
+            rotation = 0
         else:
-            angle = math.degrees(math.atan2(-heading.y, heading.x)) % 360.0
-            sprite_index = int(round((angle / 360.0) * (cls._SPRITE_VARIANT_COUNT - 1))) + 1
+            angle_from_up = math.degrees(math.atan2(heading.x, -heading.y)) % 360.0
+            flip_x = False
+            flip_y = False
+            rotation = 0
 
-        sprite_index = max(1, min(cls._SPRITE_VARIANT_COUNT, sprite_index))
-        if sprite_index not in cls._SPRITE_CACHE:
-            cls._SPRITE_CACHE[sprite_index] = Entity.load_image(
+            if angle_from_up <= 90.0:
+                base_angle = angle_from_up
+            elif angle_from_up <= 180.0:
+                base_angle = 180.0 - angle_from_up
+                flip_y = True
+            elif angle_from_up <= 270.0:
+                base_angle = angle_from_up - 180.0
+                rotation = 180
+            else:
+                base_angle = 360.0 - angle_from_up
+                flip_x = True
+
+            sprite_index = int(round((base_angle / 90.0) * (cls._BASE_SPRITE_COUNT - 1))) + 1
+
+        sprite_index = max(1, min(cls._BASE_SPRITE_COUNT, sprite_index))
+        if sprite_index not in cls._BASE_SPRITE_CACHE:
+            cls._BASE_SPRITE_CACHE[sprite_index] = Entity.load_image(
                 "assets", "arrow", f"{sprite_index}.png",
                 fallback_size=(18, 6),
                 fallback_color=ORANGE,
             )
 
-        sprite = cls._SPRITE_CACHE.get(sprite_index)
+        cache_key = (sprite_index, flip_x, flip_y, rotation)
+        if cache_key not in cls._SPRITE_CACHE:
+            sprite = cls._BASE_SPRITE_CACHE[sprite_index]
+            if flip_x or flip_y:
+                sprite = pygame.transform.flip(sprite, flip_x, flip_y)
+            if rotation:
+                sprite = pygame.transform.rotate(sprite, rotation)
+            cls._SPRITE_CACHE[cache_key] = sprite
+
+        sprite = cls._SPRITE_CACHE.get(cache_key)
         return sprite.copy() if sprite is not None else None
 
     def _hit_target(self) -> None:
