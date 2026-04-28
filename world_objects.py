@@ -28,16 +28,13 @@ from settings import DARK_BROWN, FONT_SMALL, GOLD, GREEN, LIGHT_GRAY, ORANGE, RE
 
 
 BUILDING_SPRITE_PATHS = {
-    "farm": ("assets", "buildings", "lumberyard", "4.png"),
-    "lumberyard": ("assets", "buildings", "lumberyard", "4.png"),
-    "stone_quarry": ("assets", "buildings", "lumberyard", "4.png"),
-    "gold_quarry": ("assets", "buildings", "lumberyard", "4.png"),
-    "main_base": ("assets", "buildings", "lumberyard", "4.png"),
+    "farm": ("assets", "buildings", "farm", "1.png"),
+    "lumberyard": ("assets", "buildings", "lumberyard", "3.png"),
+    "stone_quarry": ("assets", "buildings", "quarry", "2.png"),
+    "gold_quarry": ("assets", "buildings", "goldmine", "4.png"),
+    "main_base": ("assets", "buildings", "towncentre", "1.png"),
 }
-WORKER_SPRITE_PATHS = [
-    ("assets", "workers", f"characterBlue ({index}).png")
-    for index in range(1, 6)
-]
+WORKER_VARIANTS = ("1", "2", "3", "4")
 ARCHER_TOWER_STAGE_1_SHEET = ("assets", "buildings", "archertower", "2.png")
 ARCHER_TOWER_STAGE_1_FRAME_INDEX = 1
 ARCHER_TOWER_STAGE_FRAME_COUNT = 4
@@ -57,6 +54,7 @@ STRUCTURE_RENDER_OFFSETS = {
     "stone_quarry": 24,
     "gold_quarry": 24,
     "arrow_tower": 24,
+    "bomb_tower": 24,
     "main_base": 24,
 }
 RESOURCE_CLUSTER_MAX = 5
@@ -65,27 +63,84 @@ TOWER_UPGRADE_LEVELS = {
         {
             "max_health": 150.0,
             "tower_range": TILE_SIZE * 3.7,
-            "projectile_damage": 14.0,
-            "projectile_speed": 340.0,
-            "attack_cooldown": 0.85,
+            "projectile_damage": 18.0,
+            "projectile_speed": 360.0,
+            "attack_cooldown": 1.1,
             "upgrade_cost": None,
         },
         {
             "max_health": 185.0,
             "tower_range": TILE_SIZE * 4.15,
-            "projectile_damage": 20.0,
-            "projectile_speed": 370.0,
-            "attack_cooldown": 0.74,
+            "projectile_damage": 24.0,
+            "projectile_speed": 390.0,
+            "attack_cooldown": 0.96,
             "upgrade_cost": {"wood": 55, "stone": 24},
         },
         {
             "max_health": 225.0,
             "tower_range": TILE_SIZE * 4.65,
-            "projectile_damage": 27.0,
-            "projectile_speed": 405.0,
-            "attack_cooldown": 0.64,
+            "projectile_damage": 30.0,
+            "projectile_speed": 420.0,
+            "attack_cooldown": 0.84,
             "upgrade_cost": {"wood": 72, "stone": 32, "gold": 20},
         },
+    ),
+    "bomb_tower": (
+        {
+            "max_health": 170.0,
+            "tower_range": TILE_SIZE * 4.5,
+            "projectile_damage": 34.0,
+            "projectile_speed": 220.0,
+            "attack_cooldown": 2.8,
+            "splash_radius": TILE_SIZE * 0.95,
+            "upgrade_cost": None,
+        },
+        {
+            "max_health": 205.0,
+            "tower_range": TILE_SIZE * 5.0,
+            "projectile_damage": 46.0,
+            "projectile_speed": 235.0,
+            "attack_cooldown": 2.45,
+            "splash_radius": TILE_SIZE * 1.15,
+            "upgrade_cost": {"wood": 62, "stone": 36, "gold": 16},
+        },
+        {
+            "max_health": 248.0,
+            "tower_range": TILE_SIZE * 5.55,
+            "projectile_damage": 60.0,
+            "projectile_speed": 250.0,
+            "attack_cooldown": 2.1,
+            "splash_radius": TILE_SIZE * 1.35,
+            "upgrade_cost": {"wood": 84, "stone": 48, "gold": 28},
+        },
+    ),
+}
+STRUCTURE_UPGRADE_LEVELS = {
+    **TOWER_UPGRADE_LEVELS,
+    "farm": (
+        {"max_health": 110.0, "worker_count": 1, "food_upkeep": 0, "upgrade_cost": None},
+        {"max_health": 142.0, "worker_count": 2, "food_upkeep": 1, "upgrade_cost": {"wood": 36, "stone": 12}},
+        {"max_health": 178.0, "worker_count": 3, "food_upkeep": 2, "upgrade_cost": {"wood": 50, "stone": 20, "gold": 8}},
+    ),
+    "lumberyard": (
+        {"max_health": 130.0, "worker_count": 1, "food_upkeep": 1, "upgrade_cost": None},
+        {"max_health": 165.0, "worker_count": 2, "food_upkeep": 2, "upgrade_cost": {"wood": 42, "stone": 18}},
+        {"max_health": 205.0, "worker_count": 3, "food_upkeep": 3, "upgrade_cost": {"wood": 58, "stone": 26, "gold": 12}},
+    ),
+    "stone_quarry": (
+        {"max_health": 140.0, "worker_count": 1, "food_upkeep": 1, "upgrade_cost": None},
+        {"max_health": 180.0, "worker_count": 2, "food_upkeep": 2, "upgrade_cost": {"wood": 44, "stone": 22}},
+        {"max_health": 224.0, "worker_count": 3, "food_upkeep": 3, "upgrade_cost": {"wood": 62, "stone": 30, "gold": 14}},
+    ),
+    "gold_quarry": (
+        {"max_health": 145.0, "worker_count": 1, "food_upkeep": 1, "upgrade_cost": None},
+        {"max_health": 188.0, "worker_count": 2, "food_upkeep": 2, "upgrade_cost": {"wood": 50, "stone": 24, "gold": 16}},
+        {"max_health": 236.0, "worker_count": 3, "food_upkeep": 3, "upgrade_cost": {"wood": 68, "stone": 32, "gold": 28}},
+    ),
+    "main_base": (
+        {"max_health": 560.0, "food_upkeep": 0, "upgrade_cost": None},
+        {"max_health": 700.0, "food_upkeep": 1, "upgrade_cost": {"wood": 80, "stone": 50, "gold": 30}},
+        {"max_health": 880.0, "food_upkeep": 2, "upgrade_cost": {"wood": 120, "stone": 76, "gold": 52}},
     ),
 }
 
@@ -99,6 +154,7 @@ class BuildDefinition:
     cost: dict[str, int]
     max_health: float
     color: tuple[int, int, int]
+    build_time: float = 2.5
     blocks_movement: bool = True
     target_priority: int = 0
     detour_radius: float = 0.0
@@ -106,6 +162,8 @@ class BuildDefinition:
     projectile_damage: float = 0.0
     projectile_speed: float = 0.0
     attack_cooldown: float = 0.0
+    projectile_kind: str = "arrow"
+    splash_radius: float = 0.0
     food_upkeep: int = 0
     worker_resource_key: str | None = None
     supports_regrowth: bool = False
@@ -120,32 +178,38 @@ class BuildDefinition:
 
 BUILD_DEFINITIONS = {
     "farm": BuildDefinition(
-        "farm", "Farm", {"wood": 28}, max_health=110.0, color=(84, 156, 58),
+        "farm", "Farm", {"wood": 28}, max_health=110.0, color=(84, 156, 58), build_time=3.0,
         target_priority=2, detour_radius=TILE_SIZE * 2.2,
     ),
     "lumberyard": BuildDefinition(
-        "lumberyard", "Lumberyard", {"wood": 32, "stone": 10}, max_health=130.0, color=(97, 74, 44),
+        "lumberyard", "Lumber Mill", {"wood": 32, "stone": 10}, max_health=130.0, color=(97, 74, 44), build_time=4.2,
         target_priority=3, detour_radius=TILE_SIZE * 2.4, food_upkeep=1,
         worker_resource_key="tree", supports_regrowth=True,
     ),
     "stone_quarry": BuildDefinition(
-        "stone_quarry", "Stone Quarry", {"wood": 34, "stone": 14}, max_health=140.0, color=(118, 112, 104),
+        "stone_quarry", "Quarry", {"wood": 34, "stone": 14}, max_health=140.0, color=(118, 112, 104), build_time=4.6,
         target_priority=3, detour_radius=TILE_SIZE * 2.4, food_upkeep=1,
         worker_resource_key="rock",
     ),
     "gold_quarry": BuildDefinition(
-        "gold_quarry", "Gold Quarry", {"wood": 36, "stone": 18, "gold": 12}, max_health=145.0, color=(160, 138, 64),
+        "gold_quarry", "Gold Mine", {"wood": 36, "stone": 18, "gold": 12}, max_health=145.0, color=(160, 138, 64), build_time=5.0,
         target_priority=3, detour_radius=TILE_SIZE * 2.4, food_upkeep=1,
         worker_resource_key="gold",
     ),
     "arrow_tower": BuildDefinition(
-        "arrow_tower", "Arrow Tower", {"wood": 40, "stone": 18}, max_health=150.0, color=(120, 94, 52),
+        "arrow_tower", "Arrow Tower", {"wood": 40, "stone": 18}, max_health=150.0, color=(120, 94, 52), build_time=4.0,
         target_priority=4, detour_radius=TILE_SIZE * 2.8,
-        tower_range=TILE_SIZE * 3.7, projectile_damage=14.0, projectile_speed=340.0, attack_cooldown=0.85,
+        tower_range=TILE_SIZE * 3.7, projectile_damage=18.0, projectile_speed=360.0, attack_cooldown=1.1,
         food_upkeep=2,
     ),
+    "bomb_tower": BuildDefinition(
+        "bomb_tower", "Bomb Tower", {"wood": 52, "stone": 30, "gold": 12}, max_health=170.0, color=(134, 88, 48), build_time=5.0,
+        target_priority=5, detour_radius=TILE_SIZE * 3.0,
+        tower_range=TILE_SIZE * 4.5, projectile_damage=34.0, projectile_speed=220.0, attack_cooldown=2.8,
+        projectile_kind="bomb", splash_radius=TILE_SIZE * 0.95, food_upkeep=3,
+    ),
     "main_base": BuildDefinition(
-        "main_base", "Main Base", {}, max_health=560.0, color=(150, 126, 86),
+        "main_base", "Town Centre", {}, max_health=560.0, color=(150, 126, 86), build_time=0.0,
         target_priority=8, detour_radius=TILE_SIZE * 3.2,
     ),
     "wall": BuildDefinition(
@@ -164,8 +228,7 @@ BUILD_MENU_ORDER = [
     "stone_quarry",
     "gold_quarry",
     "arrow_tower",
-    "wall",
-    "spike_trap",
+    "bomb_tower",
 ]
 
 
@@ -223,7 +286,7 @@ def _footprint_for_key(building_key: str) -> tuple[int, int]:
         return size, size
     if building_key in {"farm", "lumberyard", "stone_quarry", "gold_quarry", "main_base"}:
         return int(TILE_SIZE * 1.14), int(TILE_SIZE * 0.42)
-    if building_key == "arrow_tower":
+    if building_key in {"arrow_tower", "bomb_tower"}:
         return int(TILE_SIZE * 0.54), int(TILE_SIZE * 0.34)
     size = int(TILE_SIZE * 0.68)
     return size, size
@@ -235,10 +298,25 @@ class Structure(Entity):
     _BUILDING_SPRITE_CACHE: dict[str, pygame.Surface] = {}
     _BUILDING_COLLISION_CACHE: dict[str, pygame.Rect] = {}
     _BUILDING_SPRITE_SCALE = 0.75
-    _WORKER_SPRITE_CACHE: list[pygame.Surface] = []
-    _WORKER_RENDER_SIZE = (12, 18)
-    _LUMBERYARD_WORKER_COUNT = 2
-    _FARM_WORKER_COUNT = 2
+    _WORKER_ANIMATION_CACHE: dict[tuple[str, str, str], tuple[pygame.Surface, ...]] = {}
+    _WORKER_RENDER_SIZE = (18, 28)
+    _WORKER_ANIMATION_DIRECTION_CODES = {
+        "down": "D",
+        "side": "S",
+        "up": "U",
+    }
+    _WORKER_ANIMATION_ACTION_NAMES = {
+        "idle": "Idle",
+        "walk": "Walk",
+        "special": "Special",
+    }
+    _WORKER_ANIMATION_FRAME_DURATIONS = {
+        "idle": 0.18,
+        "walk": 0.12,
+        "special": 0.12,
+    }
+    _LUMBERYARD_WORKER_COUNT = 1
+    _FARM_WORKER_COUNT = 1
     _LUMBERYARD_HARVEST_RADIUS = TILE_SIZE * 4.0
     _LUMBERYARD_REPLANT_RADIUS = TILE_SIZE * 3.8
     _LUMBERYARD_TREE_TARGET = 6
@@ -303,14 +381,18 @@ class Structure(Entity):
         self.revealed = not definition.hidden_to_enemy
         self.attack_radius = max(self.collision_size) / 2 + 8
         self.level = 1
-        self.max_level = max(1, len(TOWER_UPGRADE_LEVELS.get(definition.key, ())))
+        self.max_level = max(1, len(STRUCTURE_UPGRADE_LEVELS.get(definition.key, ())))
         self.tower_range = definition.tower_range
         self.projectile_damage = definition.projectile_damage
         self.projectile_speed = definition.projectile_speed
         self.attack_cooldown = definition.attack_cooldown
+        self.projectile_kind = definition.projectile_kind
+        self.splash_radius = definition.splash_radius
+        self.food_upkeep = definition.food_upkeep
         self.worker_resource_key = definition.worker_resource_key
         self.supports_regrowth = definition.supports_regrowth
-        self.workers = self._create_workers() if self._uses_workers() else []
+        self.worker_count = self._default_worker_count() if self._uses_workers() else 0
+        self.workers = self._create_workers(count=self.worker_count) if self._uses_workers() else []
         self.farm_plots = self._create_farm_plots() if definition.key == "farm" else []
         self.quarry_pits = self._create_quarry_pits() if self.definition.key in {"stone_quarry", "gold_quarry"} else []
         self.is_operational = True
@@ -333,14 +415,14 @@ class Structure(Entity):
 
     @property
     def is_upgradeable(self) -> bool:
-        return self.definition.key in TOWER_UPGRADE_LEVELS and self.level < self.max_level
+        return self.definition.key in STRUCTURE_UPGRADE_LEVELS and self.level < self.max_level
 
     @property
     def is_repairable(self) -> bool:
         return self.definition.key == "arrow_tower" and self.health < self.max_health - 0.01
 
     def get_upgrade_cost(self) -> dict[str, int] | None:
-        stages = TOWER_UPGRADE_LEVELS.get(self.definition.key)
+        stages = STRUCTURE_UPGRADE_LEVELS.get(self.definition.key)
         if not stages or self.level >= len(stages):
             return None
         return stages[self.level].get("upgrade_cost")
@@ -508,31 +590,45 @@ class Structure(Entity):
         return Vector2(self.pos.x, self.get_worker_door_position().y + self._WORKER_EXIT_OFFSET_Y)
 
     @classmethod
-    def _load_worker_surfaces(cls) -> list[pygame.Surface]:
-        if cls._WORKER_SPRITE_CACHE:
-            return cls._WORKER_SPRITE_CACHE
+    def _load_worker_frames(cls, variant: str, direction: str, action: str) -> tuple[pygame.Surface, ...]:
+        cache_key = (variant, direction, action)
+        if cache_key in cls._WORKER_ANIMATION_CACHE:
+            return cls._WORKER_ANIMATION_CACHE[cache_key]
 
-        for path_parts in WORKER_SPRITE_PATHS:
-            image = Entity.load_image(
-                *path_parts,
-                fallback_size=cls._WORKER_RENDER_SIZE,
-                fallback_color=(80, 150, 210),
-            )
-            image = pygame.transform.smoothscale(image, cls._WORKER_RENDER_SIZE)
-            cls._WORKER_SPRITE_CACHE.append(image)
+        direction_code = cls._WORKER_ANIMATION_DIRECTION_CODES[direction]
+        action_name = cls._WORKER_ANIMATION_ACTION_NAMES[action]
+        sheet = Entity.load_image(
+            "assets", "workers", variant, f"{direction_code}_{action_name}.png",
+            fallback_size=(48 * 4, 48),
+            fallback_color=(80, 150, 210),
+        )
+        frame_count = max(1, sheet.get_width() // max(1, sheet.get_height()))
+        frame_width = max(1, sheet.get_width() // frame_count)
 
-        return cls._WORKER_SPRITE_CACHE
+        frames = []
+        for frame_index in range(frame_count):
+            frame_rect = pygame.Rect(frame_index * frame_width, 0, frame_width, sheet.get_height())
+            frame = sheet.subsurface(frame_rect).copy()
+            if frame.get_size() != cls._WORKER_RENDER_SIZE:
+                frame = pygame.transform.smoothscale(frame, cls._WORKER_RENDER_SIZE)
+            frames.append(frame)
 
-    def _create_workers(self) -> list[dict]:
-        worker_sprites = self._load_worker_surfaces()
-        sprite_indices = list(range(len(worker_sprites)))
-        random.shuffle(sprite_indices)
+        cls._WORKER_ANIMATION_CACHE[cache_key] = tuple(frames)
+        return cls._WORKER_ANIMATION_CACHE[cache_key]
 
-        worker_count = self._FARM_WORKER_COUNT if self.definition.key == "farm" else self._LUMBERYARD_WORKER_COUNT
+    def _default_worker_count(self) -> int:
+        return self._FARM_WORKER_COUNT if self.definition.key == "farm" else self._LUMBERYARD_WORKER_COUNT
+
+    def _create_workers(self, count: int | None = None) -> list[dict]:
+        worker_variants = list(WORKER_VARIANTS)
+        random.shuffle(worker_variants)
+
+        worker_count = int(count if count is not None else self._default_worker_count())
 
         workers: list[dict] = []
         for worker_index in range(worker_count):
-            sprite = worker_sprites[sprite_indices[worker_index % len(sprite_indices)]].copy()
+            variant = worker_variants[worker_index % len(worker_variants)]
+            sprite = self._load_worker_frames(variant, "down", "idle")[0].copy()
             workers.append(
                 {
                     "pos": Vector2(self.pos),
@@ -540,9 +636,13 @@ class Structure(Entity):
                     "target": None,
                     "target_pos": None,
                     "timer": 0.0,
+                    "variant": variant,
                     "base_sprite": sprite,
+                    "animation_direction": "down",
+                    "animation_action": "idle",
+                    "animation_frame_index": 0,
+                    "animation_timer": 0.0,
                     "flip_x": False,
-                    "rotation_angle": 0.0,
                     "carrying_amount": 0,
                     "carrying_resource": None,
                     "carrying_sapling": False,
@@ -595,6 +695,7 @@ class Structure(Entity):
             return
 
         for worker in self.workers:
+            self._advance_worker_animation(worker, dt)
             state = worker["state"]
             target = worker.get("target")
 
@@ -683,11 +784,13 @@ class Structure(Entity):
             if state == "planting":
                 worker["timer"] -= dt
                 if worker["timer"] <= 0.0:
+                    clump_count = manager.rng.randint(1, RESOURCE_CLUSTER_MAX)
                     planted = manager.spawn_resource_node(
                         "tree",
                         worker["target_pos"],
-                        total_yield=manager.rng.randint(6, 10),
+                        total_yield=manager.rng.randint(6, 10) * clump_count,
                         planted_by=self,
+                        cluster_count=clump_count,
                     )
                     if planted is not None:
                         self.trees_planted += 1
@@ -774,6 +877,7 @@ class Structure(Entity):
 
     def _update_farm_workers(self, dt: float) -> None:
         for worker in self.workers:
+            self._advance_worker_animation(worker, dt)
             state = worker["state"]
 
             if state == "idle":
@@ -862,10 +966,10 @@ class Structure(Entity):
             return True
 
         if abs(direction.y) > abs(direction.x):
-            worker["rotation_angle"] = -90 if direction.y < 0 else 90
+            worker["animation_direction"] = "up" if direction.y < 0 else "down"
             worker["flip_x"] = False
         else:
-            worker["rotation_angle"] = 0.0
+            worker["animation_direction"] = "side"
             worker["flip_x"] = direction.x < -0.5
 
         step = min(distance, self._LUMBERYARD_WORKER_SPEED * dt)
@@ -896,8 +1000,6 @@ class Structure(Entity):
                 continue
 
             draw_image = worker["base_sprite"]
-            if worker.get("rotation_angle"):
-                draw_image = pygame.transform.rotate(draw_image, worker["rotation_angle"])
             if worker.get("flip_x"):
                 draw_image = pygame.transform.flip(draw_image, True, False)
 
@@ -921,6 +1023,31 @@ class Structure(Entity):
                 pygame.draw.circle(surface, indicator_color, (draw_rect.right - 4, draw_rect.top + 8), 4)
             elif worker.get("carrying_sapling"):
                 pygame.draw.circle(surface, self._WORKER_CARRY_COLORS["sapling"], (draw_rect.right - 4, draw_rect.top + 8), 4)
+
+    def _advance_worker_animation(self, worker: dict, dt: float) -> None:
+        state = worker.get("state", "idle")
+        if state in {"moving_to_resource", "moving_to_plant_site", "moving_to_dig_site", "moving_to_plot", "returning"}:
+            action = "walk"
+        elif state in {"harvesting", "planting", "digging", "tending_plot", "dropping_off"}:
+            action = "special"
+        else:
+            action = "idle"
+
+        direction = worker.get("animation_direction", "down")
+        frames = self._load_worker_frames(worker.get("variant", "1"), direction, action)
+
+        if worker.get("animation_action") != action:
+            worker["animation_action"] = action
+            worker["animation_frame_index"] = 0
+            worker["animation_timer"] = 0.0
+
+        frame_duration = self._WORKER_ANIMATION_FRAME_DURATIONS[action]
+        worker["animation_timer"] += dt
+        while worker["animation_timer"] >= frame_duration and len(frames) > 1:
+            worker["animation_timer"] -= frame_duration
+            worker["animation_frame_index"] = (worker["animation_frame_index"] + 1) % len(frames)
+
+        worker["base_sprite"] = frames[worker["animation_frame_index"]]
 
     def _worker_should_draw_behind(self, worker: dict) -> bool:
         if self.image.get_height() <= TILE_SIZE:
@@ -950,7 +1077,7 @@ class Structure(Entity):
         return draw_rect
 
     def _update_food_upkeep(self, dt: float) -> None:
-        if self.definition.food_upkeep <= 0:
+        if self.food_upkeep <= 0:
             self.is_operational = True
             return
 
@@ -959,10 +1086,10 @@ class Structure(Entity):
             return
 
         player = self._player()
-        upkeep_cost = {"food": self.definition.food_upkeep}
+        upkeep_cost = {"food": self.food_upkeep}
         if player is not None and player.consume_resources(upkeep_cost):
             self.food_upkeep_timer = self._FOOD_UPKEEP_INTERVAL
-            self.food_consumed += self.definition.food_upkeep
+            self.food_consumed += self.food_upkeep
             self.is_operational = True
             return
 
@@ -1088,15 +1215,24 @@ class Structure(Entity):
             self.projectile_damage = self.definition.projectile_damage
             self.projectile_speed = self.definition.projectile_speed
             self.attack_cooldown = self.definition.attack_cooldown
+            self.projectile_kind = self.definition.projectile_kind
+            self.splash_radius = self.definition.splash_radius
+            self.food_upkeep = self.definition.food_upkeep
             if reset_health:
                 self.health = self.max_health
             return
 
-        self.max_health = float(stage_data["max_health"])
-        self.tower_range = float(stage_data["tower_range"])
-        self.projectile_damage = float(stage_data["projectile_damage"])
-        self.projectile_speed = float(stage_data["projectile_speed"])
-        self.attack_cooldown = float(stage_data["attack_cooldown"])
+        self.max_health = float(stage_data.get("max_health", self.definition.max_health))
+        self.tower_range = float(stage_data.get("tower_range", self.definition.tower_range))
+        self.projectile_damage = float(stage_data.get("projectile_damage", self.definition.projectile_damage))
+        self.projectile_speed = float(stage_data.get("projectile_speed", self.definition.projectile_speed))
+        self.attack_cooldown = float(stage_data.get("attack_cooldown", self.definition.attack_cooldown))
+        self.projectile_kind = str(stage_data.get("projectile_kind", self.definition.projectile_kind))
+        self.splash_radius = float(stage_data.get("splash_radius", self.definition.splash_radius))
+        self.food_upkeep = int(stage_data.get("food_upkeep", self.definition.food_upkeep))
+        if self._uses_workers():
+            self.worker_count = int(stage_data.get("worker_count", self._default_worker_count()))
+            self.workers = self._create_workers(count=self.worker_count)
         if reset_health:
             self.health = self.max_health
         else:
@@ -1112,7 +1248,7 @@ class Structure(Entity):
         self.rect = self.image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
 
     def _get_level_data(self):
-        stages = TOWER_UPGRADE_LEVELS.get(self.definition.key)
+        stages = STRUCTURE_UPGRADE_LEVELS.get(self.definition.key)
         if not stages:
             return None
         return stages[self.level - 1]
@@ -1157,6 +1293,13 @@ class Structure(Entity):
                 pygame.draw.rect(surface, accent, (battlement_x, 4, 4, 4))
             pygame.draw.line(surface, ORANGE, (24, 18), (36, 10), 2)
             pygame.draw.line(surface, WHITE, (34, 12), (40, 8), 1)
+        elif definition.key == "bomb_tower":
+            pygame.draw.rect(surface, (104, 80, 50), (15, 14, 18, 22))
+            pygame.draw.rect(surface, accent, (11, 8, 26, 8))
+            for battlement_x in range(12, 36, 6):
+                pygame.draw.rect(surface, accent, (battlement_x, 4, 4, 4))
+            pygame.draw.line(surface, (76, 56, 40), (22, 18), (35, 12), 4)
+            pygame.draw.circle(surface, (42, 38, 34), (37, 11), 4)
         elif definition.key == "wall":
             pygame.draw.rect(surface, accent, (6, 18, 36, 12), border_radius=3)
             for x in range(8, 38, 8):
@@ -1276,6 +1419,7 @@ class Structure(Entity):
 class ResourceNode(Entity):
     """One harvestable tree or rock node."""
 
+    _ROCK_SPRITE_CACHE: dict[tuple[str, int], pygame.Surface] = {}
     _CLUSTER_LAYOUTS = {
         1: (Vector2(0, 0),),
         2: (Vector2(-10, 2), Vector2(10, -1)),
@@ -1400,8 +1544,27 @@ class ResourceNode(Entity):
             label = FONT_SMALL.render(str(self.remaining_yield), True, WHITE)
             surface.blit(label, (int(screen_pos.x) - label.get_width() // 2, int(screen_pos.y) - 26))
 
-    @staticmethod
-    def _build_surface(definition: ResourceNodeDefinition) -> pygame.Surface:
+    @classmethod
+    def _build_surface(cls, definition: ResourceNodeDefinition) -> pygame.Surface:
+        if definition.key in {"rock", "gold"}:
+            sprite_index = random.randint(1, 6)
+            cache_key = (definition.key, sprite_index)
+            if cache_key not in cls._ROCK_SPRITE_CACHE:
+                image = Entity.load_image(
+                    "assets", "rocks", f"{sprite_index}.png",
+                    fallback_size=(46, 46),
+                    fallback_color=(118, 118, 118),
+                )
+                if image.get_size() != (46, 46):
+                    image = pygame.transform.smoothscale(image, (46, 46))
+                if definition.key == "gold":
+                    image = image.copy()
+                    tint_surface = pygame.Surface(image.get_size(), pygame.SRCALPHA)
+                    tint_surface.fill((224, 188, 76, 255))
+                    image.blit(tint_surface, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+                cls._ROCK_SPRITE_CACHE[cache_key] = image
+            return cls._ROCK_SPRITE_CACHE[cache_key].copy()
+
         surface = pygame.Surface((46, 46), pygame.SRCALPHA)
 
         if definition.key == "tree":
@@ -1425,12 +1588,16 @@ class ResourceNode(Entity):
 class ArrowProjectile:
     """Simple projectile fired by an arrow tower."""
 
+    _SPRITE_CACHE: dict[int, pygame.Surface] = {}
+    _SPRITE_VARIANT_COUNT = 27
+
     def __init__(self, position: Vector2, target, damage: float, speed: float) -> None:
         self.pos = Vector2(position)
         self.target = target
         self.damage = float(damage)
         self.speed = float(speed)
         self.alive = True
+        self.heading = Vector2(1, 0)
 
     def update(self, dt: float) -> None:
         if not self.alive:
@@ -1447,6 +1614,7 @@ class ArrowProjectile:
             return
 
         heading = direction.normalize()
+        self.heading = heading
         step = min(distance, self.speed * dt)
         self.pos += heading * step
 
@@ -1458,12 +1626,102 @@ class ArrowProjectile:
             return
 
         screen_pos = camera.world_to_screen(self.pos)
-        pygame.draw.circle(surface, ORANGE, (int(screen_pos.x), int(screen_pos.y)), max(2, int(3 * camera.scale_x)))
-        pygame.draw.circle(surface, WHITE, (int(screen_pos.x), int(screen_pos.y)), max(2, int(3 * camera.scale_x)), 1)
+        sprite = self._get_sprite_for_heading(self.heading)
+        if sprite is None:
+            pygame.draw.circle(surface, ORANGE, (int(screen_pos.x), int(screen_pos.y)), max(2, int(3 * camera.scale_x)))
+            pygame.draw.circle(surface, WHITE, (int(screen_pos.x), int(screen_pos.y)), max(2, int(3 * camera.scale_x)), 1)
+            return
+
+        draw_size = (
+            max(6, int(sprite.get_width() * camera.scale_x)),
+            max(6, int(sprite.get_height() * camera.scale_y)),
+        )
+        if draw_size != sprite.get_size():
+            sprite = pygame.transform.smoothscale(sprite, draw_size)
+        draw_rect = sprite.get_rect(center=(int(screen_pos.x), int(screen_pos.y)))
+        surface.blit(sprite, draw_rect)
+
+    @classmethod
+    def _get_sprite_for_heading(cls, heading: Vector2) -> pygame.Surface | None:
+        if heading.length_squared() <= 0.0001:
+            sprite_index = 1
+        else:
+            angle = math.degrees(math.atan2(-heading.y, heading.x)) % 360.0
+            sprite_index = int(round((angle / 360.0) * (cls._SPRITE_VARIANT_COUNT - 1))) + 1
+
+        sprite_index = max(1, min(cls._SPRITE_VARIANT_COUNT, sprite_index))
+        if sprite_index not in cls._SPRITE_CACHE:
+            cls._SPRITE_CACHE[sprite_index] = Entity.load_image(
+                "assets", "arrow", f"{sprite_index}.png",
+                fallback_size=(18, 6),
+                fallback_color=ORANGE,
+            )
+
+        sprite = cls._SPRITE_CACHE.get(sprite_index)
+        return sprite.copy() if sprite is not None else None
 
     def _hit_target(self) -> None:
         if self.target is not None and getattr(self.target, "alive", False):
             self.target.take_damage(self.damage)
+        self.alive = False
+
+
+class BombProjectile:
+    """Heavy projectile that damages enemies in a radius on impact."""
+
+    def __init__(self, position: Vector2, target, damage: float, speed: float, splash_radius: float, targets) -> None:
+        self.pos = Vector2(position)
+        self.target = target
+        self.damage = float(damage)
+        self.speed = float(speed)
+        self.splash_radius = float(splash_radius)
+        self.targets = targets
+        self.alive = True
+        self.heading = Vector2(1, 0)
+
+    def update(self, dt: float) -> None:
+        if not self.alive:
+            return
+
+        if self.target is None or not getattr(self.target, "alive", False):
+            self.alive = False
+            return
+
+        direction = self.target.pos - self.pos
+        distance = direction.length()
+        if distance <= 0.001:
+            self._explode()
+            return
+
+        self.heading = direction.normalize()
+        step = min(distance, self.speed * dt)
+        self.pos += self.heading * step
+
+        if distance <= step + max(8, getattr(self.target, "attack_radius", 10)):
+            self._explode()
+
+    def draw(self, surface: pygame.Surface, camera) -> None:
+        if getattr(camera, "name", "") == "minimap":
+            return
+
+        screen_pos = camera.world_to_screen(self.pos)
+        radius = max(4, int(6 * min(camera.scale_x, camera.scale_y)))
+        pygame.draw.circle(surface, (74, 68, 60), (int(screen_pos.x), int(screen_pos.y)), radius)
+        pygame.draw.circle(surface, ORANGE, (int(screen_pos.x), int(screen_pos.y)), max(2, radius - 2))
+        pygame.draw.circle(surface, WHITE, (int(screen_pos.x), int(screen_pos.y)), radius, 1)
+
+    def _explode(self) -> None:
+        for enemy in self.targets:
+            if not getattr(enemy, "alive", False):
+                continue
+
+            distance = enemy.pos.distance_to(self.pos)
+            if distance > self.splash_radius:
+                continue
+
+            falloff = max(0.4, 1.0 - (distance / max(1.0, self.splash_radius)) * 0.6)
+            enemy.take_damage(self.damage * falloff)
+
         self.alive = False
 
 
@@ -1484,7 +1742,7 @@ class WorldObjectManager:
 
         self.structures: list[Structure] = []
         self.resource_nodes: list[ResourceNode] = []
-        self.projectiles: list[ArrowProjectile] = []
+        self.projectiles: list[ArrowProjectile | BombProjectile] = []
 
         self.base_structure = self._create_main_base()
         self._spawn_resource_nodes()
@@ -1532,35 +1790,79 @@ class WorldObjectManager:
         for projectile in self.projectiles:
             projectile.draw(surface, camera)
 
+    def validate_structure_placement(
+        self,
+        building_key: str,
+        world_position,
+        player=None,
+        *,
+        check_resources: bool = False,
+    ) -> tuple[bool, str, Vector2 | None]:
+        definition = BUILD_DEFINITIONS.get(building_key)
+        if definition is None:
+            return False, "Unknown build option", None
+
+        snapped = self._snap_to_tile_center(world_position)
+        if player is not None:
+            build_radius = float(getattr(player, "build_radius", TILE_SIZE * 2.75))
+            if snapped.distance_to(player.pos) > build_radius:
+                return False, "Build within the player's work radius", snapped
+
+        tile = self.world.get_tile_at_world(snapped.x, snapped.y)
+        if tile is None or not tile.traversable:
+            return False, "That ground cannot support a structure", snapped
+
+        placement_rect = self._structure_rect(snapped, definition)
+        if player is not None and placement_rect.colliderect(player.get_collision_rect()):
+            return False, "Do not place a building on top of the player", snapped
+
+        if placement_rect.collidepoint(int(self.base_position.x), int(self.base_position.y)):
+            return False, "Keep the central base clear", snapped
+
+        if self.find_blocking_structure_for_rect(placement_rect) is not None:
+            return False, "Another structure is already there", snapped
+
+        for node in self.resource_nodes:
+            if node.rect.colliderect(placement_rect.inflate(10, 10)):
+                return False, "Harvest the nearby resource first", snapped
+
+        if check_resources and player is not None and not player.has_resources(definition.cost):
+            return False, "Not enough resources", snapped
+
+        return True, definition.label, snapped
+
+    def spawn_structure(self, building_key: str, world_position) -> Structure | None:
+        definition = BUILD_DEFINITIONS.get(building_key)
+        if definition is None:
+            return None
+
+        snapped = self._snap_to_tile_center(world_position)
+        structure = Structure(self.main, definition, snapped)
+        self.structures.append(structure)
+        return structure
+
     def place_structure(self, building_key: str, world_position, player) -> tuple[bool, str]:
         definition = BUILD_DEFINITIONS.get(building_key)
         if definition is None:
             return False, "Unknown build option"
 
-        snapped = self._snap_to_tile_center(world_position)
-        tile = self.world.get_tile_at_world(snapped.x, snapped.y)
-        if tile is None or not tile.traversable:
-            return False, "That ground cannot support a structure"
-
-        placement_rect = self._structure_rect(snapped, definition)
-        if placement_rect.colliderect(player.get_collision_rect()):
-            return False, "Do not place a building on top of the player"
-
-        if placement_rect.collidepoint(int(self.base_position.x), int(self.base_position.y)):
-            return False, "Keep the central base clear"
-
-        if self.find_blocking_structure_for_rect(placement_rect) is not None:
-            return False, "Another structure is already there"
-
-        for node in self.resource_nodes:
-            if node.rect.colliderect(placement_rect.inflate(10, 10)):
-                return False, "Harvest the nearby resource first"
+        valid, message, snapped = self.validate_structure_placement(
+            building_key,
+            world_position,
+            player,
+            check_resources=True,
+        )
+        if not valid or snapped is None:
+            return False, message
 
         if not player.consume_resources(definition.cost):
             return False, "Not enough resources"
 
-        structure = Structure(self.main, definition, snapped)
-        self.structures.append(structure)
+        structure = self.spawn_structure(building_key, snapped)
+        if structure is None:
+            player.refund_resources(definition.cost)
+            return False, "Unknown build option"
+
         self._announce(f"Placed {definition.label}", accent=GOLD, duration=1.3)
         return True, definition.label
 
@@ -1669,7 +1971,15 @@ class WorldObjectManager:
 
         return True
 
-    def spawn_resource_node(self, resource_key: str, world_position, total_yield: int | None = None, planted_by=None, ignore_structure=None):
+    def spawn_resource_node(
+        self,
+        resource_key: str,
+        world_position,
+        total_yield: int | None = None,
+        planted_by=None,
+        ignore_structure=None,
+        cluster_count: int | None = None,
+    ):
         if resource_key not in RESOURCE_DEFINITIONS:
             return None
 
@@ -1678,7 +1988,7 @@ class WorldObjectManager:
             return None
 
         definition = RESOURCE_DEFINITIONS[resource_key]
-        cluster_count = 1 if planted_by is not None else self.rng.randint(1, RESOURCE_CLUSTER_MAX)
+        cluster_count = max(1, min(RESOURCE_CLUSTER_MAX, int(cluster_count if cluster_count is not None else self.rng.randint(1, RESOURCE_CLUSTER_MAX))))
         yield_amount = (
             int(total_yield)
             if total_yield is not None
@@ -1795,9 +2105,21 @@ class WorldObjectManager:
                 continue
 
             target = min(candidates, key=lambda enemy: enemy.pos.distance_squared_to(structure.pos))
-            self.projectiles.append(
-                ArrowProjectile(structure.pos, target, structure.projectile_damage, structure.projectile_speed)
-            )
+            if getattr(structure, "projectile_kind", "arrow") == "bomb":
+                self.projectiles.append(
+                    BombProjectile(
+                        structure.pos,
+                        target,
+                        structure.projectile_damage,
+                        structure.projectile_speed,
+                        getattr(structure, "splash_radius", 0.0),
+                        living_enemies,
+                    )
+                )
+            else:
+                self.projectiles.append(
+                    ArrowProjectile(structure.pos, target, structure.projectile_damage, structure.projectile_speed)
+                )
             structure.cooldown_remaining = structure.attack_cooldown
 
     def _spawn_resource_nodes(self) -> None:

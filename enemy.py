@@ -54,13 +54,14 @@ class EnemyTier:
     attack_range: float = 26.0
     detour_radius: float = TILE_SIZE * 2.1
     can_detect_traps: bool = False
+    size_scale: float = 1.0
 
 
 ENEMY_TIERS = {
-    "scout": EnemyTier("scout", "Scout", speed=78.0, max_health=20.0, tint=(255, 190, 190), attack_damage=5.0, attack_cooldown=0.65, attack_range=22.0, detour_radius=TILE_SIZE * 1.9),
-    "raider": EnemyTier("raider", "Raider", speed=64.0, max_health=42.0, tint=(255, 155, 155), attack_damage=8.0, attack_cooldown=0.8, attack_range=24.0, detour_radius=TILE_SIZE * 2.2),
-    "brute": EnemyTier("brute", "Brute", speed=48.0, max_health=90.0, tint=(225, 120, 120), attack_damage=15.0, attack_cooldown=1.0, attack_range=28.0, detour_radius=TILE_SIZE * 2.0),
-    "sapper": EnemyTier("sapper", "Sapper", speed=58.0, max_health=34.0, tint=(192, 214, 118), attack_damage=9.0, attack_cooldown=0.75, attack_range=24.0, detour_radius=TILE_SIZE * 2.6, can_detect_traps=True),
+    "scout": EnemyTier("scout", "Scout", speed=78.0, max_health=20.0, tint=(255, 255, 255), attack_damage=5.0, attack_cooldown=0.65, attack_range=22.0, detour_radius=TILE_SIZE * 1.9, size_scale=1.0),
+    "raider": EnemyTier("raider", "Raider", speed=64.0, max_health=42.0, tint=(240, 156, 156), attack_damage=8.0, attack_cooldown=0.8, attack_range=24.0, detour_radius=TILE_SIZE * 2.2, size_scale=1.08),
+    "brute": EnemyTier("brute", "Brute", speed=48.0, max_health=90.0, tint=(226, 116, 104), attack_damage=15.0, attack_cooldown=1.0, attack_range=28.0, detour_radius=TILE_SIZE * 2.0, size_scale=1.24),
+    "sapper": EnemyTier("sapper", "Sapper", speed=58.0, max_health=34.0, tint=(210, 170, 118), attack_damage=9.0, attack_cooldown=0.75, attack_range=24.0, detour_radius=TILE_SIZE * 2.6, can_detect_traps=True, size_scale=1.06),
 }
 
 
@@ -108,7 +109,7 @@ class Enemy(Entity):
         "sapper": 4,
     }
 
-    def __init__(self, main, spawn_point: SpawnPoint, tier_key: str = "scout") -> None:
+    def __init__(self, main, spawn_point: SpawnPoint, tier_key: str = "scout", wave_number: int = 1) -> None:
         tier = ENEMY_TIERS[tier_key]
 
         base_image = self._get_animation_frames("down", "walk")[0].copy()
@@ -123,13 +124,21 @@ class Enemy(Entity):
         )
 
         self.tier = tier
+        self.wave_number = max(1, int(wave_number))
+        self.strength_step = max(0, self.wave_number // 5)
+        self.health_scale = 1.0 + (0.18 * self.strength_step)
+        self.visual_scale = tier.size_scale + (0.03 * self.strength_step)
+        self.display_tint = self._build_display_tint()
         self.spawn_point = spawn_point
         self.path_points = spawn_point.path_points
         self.image = base_image
-        self.collision_size = (self._COLLISION_W, self._COLLISION_H)
+        self.collision_size = (
+            max(self._COLLISION_W, int(self._COLLISION_W * self.visual_scale)),
+            max(self._COLLISION_H, int(self._COLLISION_H * self.visual_scale)),
+        )
 
-        self.max_health = tier.max_health
-        self.health = tier.max_health
+        self.max_health = tier.max_health * self.health_scale
+        self.health = self.max_health
         self.speed = tier.speed
         self.attack_damage = tier.attack_damage
         self.attack_cooldown = tier.attack_cooldown
@@ -149,6 +158,7 @@ class Enemy(Entity):
         self.flip_x = False
         self.death_animation_active = False
         self.death_animation_finished = False
+        self._update_animation("walk", 0.0)
 
     @property
     def current_target(self) -> Vector2 | None:
@@ -377,9 +387,36 @@ class Enemy(Entity):
         if self.animation_direction == "side" and self.flip_x:
             frame = pygame.transform.flip(frame, True, False)
 
+        frame = self._decorate_frame(frame)
+
         self.image = frame
         self.rect = self.image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
         return animation_finished
+
+    def _build_display_tint(self) -> tuple[int, int, int]:
+        red, green, blue = self.tier.tint
+        if self.tier.speed < 70.0:
+            red = min(255, red + 10 * self.strength_step)
+            green = max(82, green - 8 * self.strength_step)
+            blue = max(82, blue - 10 * self.strength_step)
+        return red, green, blue
+
+    def _decorate_frame(self, frame: pygame.Surface) -> pygame.Surface:
+        decorated = frame.copy()
+
+        if self.tier.tint != (255, 255, 255) or self.strength_step > 0:
+            tint_surface = pygame.Surface(decorated.get_size(), pygame.SRCALPHA)
+            tint_surface.fill((*self.display_tint, 255))
+            decorated.blit(tint_surface, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+
+        scaled_size = (
+            max(1, int(decorated.get_width() * self.visual_scale)),
+            max(1, int(decorated.get_height() * self.visual_scale)),
+        )
+        if scaled_size != decorated.get_size():
+            decorated = pygame.transform.smoothscale(decorated, scaled_size)
+
+        return decorated
 
     def draw(self, surface: pygame.Surface, camera=None) -> None:
         if not self.alive and not self.death_animation_active:
@@ -484,7 +521,7 @@ class EnemyDirector:
         if spawn_point is None:
             spawn_point = self.rng.choice(self.spawn_points)
 
-        enemy = Enemy(self.main, spawn_point, tier_key=tier_key)
+        enemy = Enemy(self.main, spawn_point, tier_key=tier_key, wave_number=max(1, self.wave_number))
         self.enemies.append(enemy)
         return enemy
 

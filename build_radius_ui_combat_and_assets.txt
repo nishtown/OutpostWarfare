@@ -1,0 +1,200 @@
+BUILD RADIUS, UI, COMBAT, AND ASSET PASS
+========================================
+
+Purpose
+-------
+This document explains the broad gameplay and presentation pass that added:
+- player-limited build radius and timed construction
+- building ghosts and construction assist rules
+- structure upgrade tiers with worker growth and upkeep scaling
+- icon-based build and upkeep panels in the UI
+- a new bomb tower and slower arrow tower pacing
+- enemy health scaling every five waves with stronger visual variants
+- directional player attack sprites and click-to-attack behavior
+- new building, arrow, worker, and rock art integration
+- minimap zoom clamping for smaller worlds
+
+
+1. Building placement is now range-limited and staged
+-----------------------------------------------------
+Buildings can no longer be dropped anywhere instantly.
+
+Current placement flow:
+- build previews are validated against terrain, resources, collisions, and the
+  player's build radius
+- the valid placement area is shown with a faint circle around the player
+- the building ghost turns red when the target tile is invalid or out of range
+- placing a structure now starts a timed construction job instead of spawning
+  it immediately
+- the player must stay within the smaller assist radius until progress reaches
+  100 percent
+
+Result:
+- building feels like an action the player performs on site
+- placement reads clearly before committing resources
+- out-of-range placement fails for the correct reason instead of returning a
+  less helpful terrain or overlap message
+
+Implementation area:
+- game.py
+- player.py
+- world_objects.py
+
+
+2. Economy buildings now upgrade through staffing tiers
+------------------------------------------------------
+The worker buildings no longer start fully staffed.
+
+Current staffing model:
+- farm, lumber mill, quarry, and gold mine start with 1 worker
+- first upgrade increases them to 2 workers
+- second upgrade increases them to 3 workers
+- upkeep rises with those upgrade levels
+- the selected-structure panel shows the active upkeep and the next upgrade cost
+
+Town Centre changes:
+- the town centre now also has upgrade levels for durability and upkeep
+
+Result:
+- early economy ramps more gradually
+- staffing growth is tied to player investment instead of being free upfront
+- upkeep pressure scales with stronger buildings instead of staying flat
+
+Implementation area:
+- world_objects.py
+- gameui.py
+
+
+3. Lumber mills now replant actual tree groves
+---------------------------------------------
+Replanted trees are no longer forced into a single-node clump.
+
+Current behavior:
+- planted lumber-mill groves choose a cluster count from 1 to 5
+- total planted yield scales with that chosen cluster count
+- the resulting trees use the same resource-node system as naturally spawned
+  nodes
+
+Result:
+- replanted forests read more naturally in the world
+- regrowth is visually closer to a small grove instead of a single sapling
+
+Implementation area:
+- world_objects.py
+
+
+4. Build menu presentation moved cost information out of the buttons
+-------------------------------------------------------------------
+The sidebar buttons were carrying too much text.
+
+Current UI behavior:
+- build buttons now show the building name without the cramped cost badge
+- the selection strip below the build grid now shows build cost and upkeep as
+  icon-based token rows
+- selected structures show icon-based upkeep, repair, or next-upgrade costs
+- upgrade and repair buttons are simplified back to short action labels
+
+Result:
+- the button grid is easier to scan
+- upkeep cost is visible in the same place as build and upgrade costs
+- the panel can show costs without cramming abbreviations into every button
+
+Implementation area:
+- gameui.py
+
+
+5. The minimap now clamps to the real world size
+------------------------------------------------
+The minimap camera no longer keeps an oversized view when the world is smaller
+than the target minimap zoom.
+
+Current behavior:
+- the minimap view width and height are clamped to fit inside the generated
+  world while preserving aspect ratio
+- smaller worlds therefore fill more of the minimap surface instead of looking
+  shrunken
+
+Implementation area:
+- game.py
+
+
+6. Defense balance and projectile variety were expanded
+------------------------------------------------------
+Two defense changes landed in the same pass.
+
+Arrow tower changes:
+- arrow towers now fire less frequently than before
+- their projectile now uses the angle-specific arrow art instead of a simple
+  circle marker
+
+Bomb tower changes:
+- a new bomb tower can be built from the construction menu
+- it fires slower heavy projectiles
+- impacts deal area damage in a splash radius
+- upgrade levels increase range, damage, and blast radius
+
+Implementation area:
+- world_objects.py
+- gameui.py
+
+
+7. Enemies now scale over time and read more clearly by role
+-----------------------------------------------------------
+Enemy strength and visuals now separate fast light units from slower heavy ones.
+
+Current scaling:
+- every 5 waves, enemy health gains another multiplier step
+- slower heavier enemy tiers render with larger sprites
+- heavier tiers keep a stronger red tint than the lighter scout tier
+
+Result:
+- wave pressure keeps climbing even when the composition stays familiar
+- stronger enemies are easier to read at a glance
+
+Implementation area:
+- enemy.py
+
+
+8. The player now uses directional action sheets and can attack
+--------------------------------------------------------------
+The player is no longer limited to harvesting and movement.
+
+Current combat behavior:
+- left-clicking a nearby enemy starts a short melee attack
+- the player uses directional idle, preattack, and attack sheets from the new
+  player art set
+- the attack applies damage during the strike window and then respects a short
+  cooldown
+
+Implementation area:
+- player.py
+- game.py
+
+
+9. Worker and resource art now use the new asset folders
+-------------------------------------------------------
+Several new art folders are now wired into the simulation.
+
+Integrated assets:
+- economy buildings use the new farm, lumber mill, quarry, gold mine, and town
+  centre art
+- worker visuals now load from assets/workers/1..4 and animate by state
+- arrow projectiles use the angle-based assets/arrow set
+- rock and gold nodes now use the rock sprite set, with gold veins produced by
+  tinting that art
+
+Implementation area:
+- world_objects.py
+- player.py
+
+
+10. Notes and limits
+--------------------
+This pass intentionally removed walls and spike traps from the construction UI,
+but the old definitions are still in the data file for now so existing code
+paths do not break.
+
+That means:
+- they are no longer exposed as normal player build options
+- a later cleanup pass can safely delete their unused gameplay code once there
+  is no need to preserve compatibility with older references

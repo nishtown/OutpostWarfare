@@ -420,6 +420,7 @@ class BuildingButton(Button):
         "stone_quarry": (110, 110, 110),
         "gold_quarry": (168, 138, 52),
         "arrow_tower": (135, 100, 58),
+        "bomb_tower": (152, 102, 50),
         "wall":       (130, 124, 114),
         "spike_trap": (110, 90, 58),
     }
@@ -430,7 +431,6 @@ class BuildingButton(Button):
         self.building_type = building_type
         self.selected      = False
         self.name_surf     = FONT_SMALL.render(text, True, PARCHMENT)
-        self.cost_surf     = FONT_SMALL.render(cost_text, True, GOLD)
 
     def draw(self, surface):
         # Background
@@ -453,15 +453,17 @@ class BuildingButton(Button):
         self._draw_icon_art(surface, icon_r)
 
         # Name label
-        label_y = self.rect.y + icon_h + 4
+        label_y = self.rect.bottom - self.name_surf.get_height() - 9
         nx = self.rect.centerx - self.name_surf.get_width() // 2
         surface.blit(self.name_surf, (nx, label_y))
 
-        # Cost badge (bottom-right)
-        cw = self.cost_surf.get_width()
-        surface.blit(self.cost_surf,
-                     (self.rect.right - cw - 3,
-                      self.rect.bottom - self.cost_surf.get_height() - 2))
+        pygame.draw.line(
+            surface,
+            STONE_HILIT if (self.hovered or self.selected) else SHADOW_CLR,
+            (self.rect.x + 8, self.rect.bottom - 7),
+            (self.rect.right - 8, self.rect.bottom - 7),
+            1,
+        )
 
         # Amber selection glow
         if self.selected:
@@ -518,6 +520,11 @@ class BuildingButton(Button):
             pygame.draw.rect(surface, hi, (cx-7, base.y-8, 14, 18))
             pygame.draw.rect(surface, drk, (cx-10, base.y-10, 20, 4))
             pygame.draw.line(surface, GLOW_AMBER, (cx+1, base.y), (cx+11, base.y-8), 2)
+        elif t == "bomb_tower":
+            pygame.draw.rect(surface, hi, (cx-7, base.y-8, 14, 18))
+            pygame.draw.rect(surface, drk, (cx-10, base.y-10, 20, 4))
+            pygame.draw.line(surface, (70, 48, 30), (cx-1, base.y-1), (cx+10, base.y-7), 3)
+            pygame.draw.circle(surface, ORANGE, (cx+12, base.y-8), 4)
         elif t == "wall":
             pygame.draw.rect(surface, hi, (base.x, cy-3, base.width, 8))
             for wx in range(base.x+2, base.right-2, 6):
@@ -788,6 +795,41 @@ class GameUI:
             ("STONE", self.stone, LIGHT_GRAY, _icon_stone),
         ]
 
+    @staticmethod
+    def _resource_icon_drawer(resource_key):
+        return {
+            "gold": _icon_gold,
+            "food": _icon_food,
+            "wood": _icon_wood,
+            "stone": _icon_stone,
+        }.get(resource_key)
+
+    def _draw_cost_panel(self, surface, x: int, y: int, label: str, cost: dict[str, int] | None) -> None:
+        label_surf = FONT_SMALL.render(label, True, PARCHMENT_DK)
+        surface.blit(label_surf, (x, y + 2))
+
+        icon_x = x + label_surf.get_width() + 8
+        shown = False
+        for resource_key in ("wood", "stone", "gold", "food"):
+            amount = int((cost or {}).get(resource_key, 0))
+            if amount <= 0:
+                continue
+
+            shown = True
+            amount_surf = FONT_SMALL.render(str(amount), True, PARCHMENT)
+            token_rect = pygame.Rect(icon_x, y, 22 + amount_surf.get_width(), 16)
+            _stone_fill(surface, token_rect, STONE_MID)
+            _bevel(surface, token_rect, raised=False, width=1)
+            icon_drawer = self._resource_icon_drawer(resource_key)
+            if icon_drawer is not None:
+                icon_drawer(surface, token_rect.x + 8, token_rect.centery)
+            surface.blit(amount_surf, (token_rect.x + 16, token_rect.y + 1))
+            icon_x = token_rect.right + 4
+
+        if not shown:
+            free_surf = FONT_SMALL.render("Free", True, PARCHMENT)
+            surface.blit(free_surf, (icon_x, y + 1))
+
     def _draw_top_bar(self, surface):
         bar = self.top_bar_rect
         pygame.draw.rect(surface, STONE_DARK, bar)
@@ -974,79 +1016,91 @@ class GameUI:
                 lbl = FONT_MEDIUM.render(title_text, True, GOLD)
                 health_text = f"Health: {int(structure.health)}/{int(structure.max_health)}"
                 hint_lines = [health_text]
+                panel_cost = None
+                panel_label = None
+                upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"
+                upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
 
-                if structure.definition.key == "arrow_tower":
+                if structure.definition.key in {"arrow_tower", "bomb_tower"}:
                     hint_lines.append(
                         f"Range {int(structure.tower_range)}  Damage {int(structure.projectile_damage)}"
                     )
+                    if structure.definition.key == "bomb_tower":
+                        hint_lines.append(f"Blast Radius {int(getattr(structure, 'splash_radius', 0.0))}")
                     if getattr(structure, "is_repairable", False):
-                        hint_lines.append(f"Repair Cost: {format_cost_text(structure.get_repair_cost() or {})}")
+                        hint_lines.append("Ready for field repairs")
+                        panel_label = "Repair"
+                        panel_cost = structure.get_repair_cost() or {}
                     else:
-                        upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - offline"
-                        upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
                         hint_lines.append(
-                            f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
+                            f"Food {getattr(structure, 'food_upkeep', structure.definition.food_upkeep)}/{upkeep_interval}s  {upkeep_status}"
                         )
+                        panel_label = "Keep"
+                        panel_cost = {"food": getattr(structure, "food_upkeep", structure.definition.food_upkeep)}
                 elif structure.definition.key == "farm":
                     ready_plots = sum(1 for plot in getattr(structure, "farm_plots", []) if plot.get("ready_timer", 0.0) > 0.0)
                     total_plots = len(getattr(structure, "farm_plots", []))
-                    hint_lines.append(f"Food Produced: {structure.food_produced}")
+                    hint_lines.append(f"Workers {len(getattr(structure, 'workers', []))}  Food {structure.food_produced}")
                     hint_lines.append(f"Plots Ready: {ready_plots}/{total_plots}")
+                    panel_label = "Keep"
+                    panel_cost = {"food": getattr(structure, "food_upkeep", structure.definition.food_upkeep)}
                 elif getattr(structure, "worker_resource_key", None) == "tree":
-                    hint_lines.append(f"Wood Delivered: {structure.wood_delivered}")
-                    upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"
-                    upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
-                    hint_lines.append(
-                        f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
-                    )
+                    hint_lines.append(f"Workers {len(getattr(structure, 'workers', []))}  Wood {structure.wood_delivered}")
+                    hint_lines.append(f"Food {getattr(structure, 'food_upkeep', structure.definition.food_upkeep)}/{upkeep_interval}s  {upkeep_status}")
+                    panel_label = "Keep"
+                    panel_cost = {"food": getattr(structure, "food_upkeep", structure.definition.food_upkeep)}
                 elif getattr(structure, "worker_resource_key", None) == "rock":
-                    hint_lines.append(f"Stone Delivered: {getattr(structure, 'stone_delivered', 0)}")
-                    upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"
-                    upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
-                    hint_lines.append(
-                        f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
-                    )
+                    hint_lines.append(f"Workers {len(getattr(structure, 'workers', []))}  Stone {getattr(structure, 'stone_delivered', 0)}")
+                    hint_lines.append(f"Food {getattr(structure, 'food_upkeep', structure.definition.food_upkeep)}/{upkeep_interval}s  {upkeep_status}")
+                    panel_label = "Keep"
+                    panel_cost = {"food": getattr(structure, "food_upkeep", structure.definition.food_upkeep)}
                 elif getattr(structure, "worker_resource_key", None) == "gold":
-                    hint_lines.append(f"Gold Delivered: {getattr(structure, 'gold_delivered', 0)}")
-                    upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"
-                    upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
-                    hint_lines.append(
-                        f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
-                    )
+                    hint_lines.append(f"Workers {len(getattr(structure, 'workers', []))}  Gold {getattr(structure, 'gold_delivered', 0)}")
+                    hint_lines.append(f"Food {getattr(structure, 'food_upkeep', structure.definition.food_upkeep)}/{upkeep_interval}s  {upkeep_status}")
+                    panel_label = "Keep"
+                    panel_cost = {"food": getattr(structure, "food_upkeep", structure.definition.food_upkeep)}
                 elif structure.definition.key == "main_base":
                     hint_lines.append("Protect the settlement core")
                     hint_lines.append("Enemy contact damages the base")
+                    if getattr(structure, "is_upgradeable", False):
+                        panel_label = "Next"
+                        panel_cost = structure.get_upgrade_cost() or {}
                 else:
-                    if structure.definition.food_upkeep > 0:
-                        upkeep_status = "Supplied" if getattr(structure, "is_operational", True) else "No food - idle"
-                        upkeep_interval = int(getattr(structure, "_FOOD_UPKEEP_INTERVAL", 0))
+                    if getattr(structure, "food_upkeep", structure.definition.food_upkeep) > 0:
                         hint_lines.append(
-                            f"Food {structure.definition.food_upkeep}/{upkeep_interval}s  {upkeep_status}"
+                            f"Food {getattr(structure, 'food_upkeep', structure.definition.food_upkeep)}/{upkeep_interval}s  {upkeep_status}"
                         )
+                        panel_label = "Keep"
+                        panel_cost = {"food": getattr(structure, "food_upkeep", structure.definition.food_upkeep)}
                     hint_lines.append("Click the world to deselect")
+
+                if getattr(structure, "is_upgradeable", False):
+                    panel_label = "Next"
+                    panel_cost = structure.get_upgrade_cost() or {}
 
                 surface.blit(lbl, (px + _PAD + 4, sy + 6))
                 for index, line in enumerate(hint_lines[:3]):
                     hint = FONT_SMALL.render(line, True, PARCHMENT_DK)
                     surface.blit(hint, (px + _PAD + 4, sy + 8 + lbl.get_height() + index * 16))
+                if panel_label is not None:
+                    self._draw_cost_panel(surface, px + _PAD + 4, sy + 60, panel_label, panel_cost)
             elif self.selected_building:
-                # Convert snake_case building type to a Title Case display name.
-                name_txt = self.selected_building.replace("_", " ").title()
+                definition = BUILD_DEFINITIONS[self.selected_building]
+                name_txt = definition.label
                 lbl  = FONT_MEDIUM.render(name_txt, True, GOLD)
-                cost_text = format_cost_text(BUILD_DEFINITIONS[self.selected_building].cost)
-                hint = FONT_SMALL.render(f"Cost: {cost_text}  |  Click again to cancel", True, PARCHMENT_DK)
                 surface.blit(lbl,  (px + _PAD + 4, sy + 6))
-                surface.blit(hint, (px + _PAD + 4, sy + 6 + lbl.get_height() + 2))
+                self._draw_cost_panel(surface, px + _PAD + 4, sy + 28, "Build", definition.cost)
+                self._draw_cost_panel(surface, px + _PAD + 4, sy + 48, "Keep", {"food": definition.food_upkeep})
+                hint = FONT_SMALL.render(f"Build {definition.build_time:0.1f}s  Stay nearby  |  Click again to cancel", True, PARCHMENT_DK)
+                surface.blit(hint, (px + _PAD + 4, sy + 68))
 
         if self._wave_button_y + 36 < py + ph - 42:
             _divider(surface, px + _PAD, self._wave_button_y - 10, inner_w)
             if self.selected_structure is not None and getattr(self.selected_structure, "is_repairable", False):
-                cost_text = format_cost_text(self.selected_structure.get_repair_cost() or {})
-                self.repair_button.set_text(f"Repair {cost_text}")
+                self.repair_button.set_text("Repair")
                 self.repair_button.draw(surface)
             elif self.selected_structure is not None and getattr(self.selected_structure, "is_upgradeable", False):
-                cost_text = format_cost_text(self.selected_structure.get_upgrade_cost() or {})
-                self.upgrade_button.set_text(f"Upgrade {cost_text}")
+                self.upgrade_button.set_text("Upgrade")
                 self.upgrade_button.draw(surface)
             else:
                 if self.wave_in_progress:

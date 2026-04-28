@@ -77,6 +77,22 @@ class Player(Entity):
     # Collision box is narrower than the sprite to allow tight gap navigation.
     _COLLISION_W = 16
     _COLLISION_H = 16
+    _ANIMATION_DIRECTION_CODES = {
+        "down": "D",
+        "side": "S",
+        "up": "U",
+    }
+    _ANIMATION_ACTION_NAMES = {
+        "idle": "Idle",
+        "preattack": "Preattack",
+        "attack": "Attack",
+    }
+    _ANIMATION_FRAME_DURATIONS = {
+        "idle": 0.18,
+        "preattack": 0.08,
+        "attack": 0.08,
+    }
+    _ANIMATION_CACHE: dict[tuple[str, str], tuple[pygame.Surface, ...]] = {}
 
     def __init__(self, main, x: float, y: float) -> None:
         """
@@ -86,17 +102,7 @@ class Player(Entity):
         x, y : float  initial world-space centre position
         """
         # Load the sprite before calling super so we can pass real dimensions.
-        base_image = Entity.load_image(
-            "assets", "player", "player.png",
-            fallback_size=(32, 32),
-            fallback_color=(60, 180, 240),
-        )
-
-        shooting_image = Entity.load_image(
-            "assets", "player", "player_shoot.png",
-            fallback_size=(32, 32),
-            fallback_color=(60, 120, 250), 
-        )
+        base_image = self._get_animation_frames("down", "idle")[0].copy()
 
 
         super().__init__(
@@ -111,7 +117,6 @@ class Player(Entity):
         # Keep the original unrotated image; self.image is a rotated copy.
         self.original_image: pygame.Surface = base_image
         self.image = self.original_image.copy()
-        self.shooting_image: pygame.Surface = shooting_image
 
         # Tight collision box (feet / body only, not the full sprite quad).
         self.collision_size = (self._COLLISION_W, self._COLLISION_H)
@@ -130,9 +135,23 @@ class Player(Entity):
         # ── Harvest action ────────────────────────────────────────────────
         # Only one harvest can be active at a time.  Moving cancels it.
         self.harvest_range: float = 78.0
+        self.build_radius: float = TILE_SIZE * 2.75
+        self.build_assist_radius: float = TILE_SIZE * 1.5
+        self.attack_range: float = TILE_SIZE * 1.8
+        self.attack_damage: float = 20.0
+        self.attack_cooldown: float = 0.65
+        self.attack_cooldown_remaining: float = 0.0
+        self.attack_windup: float = 0.12
+        self.attack_recovery: float = 0.2
+        self.attack_action: Optional[dict] = None
         self.harvest_action: Optional[dict] = None
         self.harvest_button_held: bool = False
         self.harvest_screen_pos: tuple[int, int] | None = None
+        self.animation_action: str = "idle"
+        self.animation_direction: str = "down"
+        self.animation_frame_index: int = 0
+        self.animation_timer: float = 0.0
+        self.flip_x: bool = False
 
     # =========================================================================
     # Event handling
@@ -239,6 +258,22 @@ class Player(Entity):
         """Cancel any active harvest without yielding resources."""
         self.harvest_action = None
 
+    def start_attack(self, target) -> bool:
+        if self.attack_cooldown_remaining > 0.0:
+            return False
+        if not self._is_attack_target_valid(target):
+            return False
+        if target.pos.distance_to(self.pos) > self.attack_range + getattr(target, "attack_radius", 8):
+            return False
+
+        self.stop_harvest()
+        self.attack_action = {
+            "target": target,
+            "timer": 0.0,
+            "damage_applied": False,
+        }
+        return True
+
     def _tick_harvest(self, dt: float) -> None:
         """Advance the active harvest timer by *dt* seconds (called from update).
 
@@ -279,6 +314,7 @@ class Player(Entity):
         5. Call ``super().update(dt)`` to sync ``self.rect`` from ``self.pos``.
         """
         keys = pygame.key.get_pressed()
+        self.attack_cooldown_remaining = max(0.0, self.attack_cooldown_remaining - dt)
 
         # ── 1. Input → movement vector ─────────────────────────────────────
         # Support both WASD and arrow keys simultaneously.
@@ -290,7 +326,7 @@ class Player(Entity):
 
         self.is_moving = move.length_squared() > 0
 
-        if self.is_moving:
+        if self.is_moving and self.attack_action is None:
             # Normalise so diagonal movement isn't √2 faster.
             move = move.normalize()
             step = move * self.speed * dt
@@ -314,10 +350,13 @@ class Player(Entity):
             if game is None or game.can_move_player_to(self.get_collision_rect(next_y)):
                 self.pos.y = next_y.y
 
-        # ── 3. Rotate sprite to face current direction ─────────────────────
-        # pygame.transform.rotate is CCW and re-centres the resulting surface.
-        self.image = pygame.transform.rotate(self.original_image, self.facing_angle)
-        self.rect  = self.image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
+        # ── 3. Update combat / animation state ────────────────────────────
+        if self.attack_action is not None:
+            self._tick_attack(dt)
+        else:
+            if self.is_moving:
+                self._set_animation_direction(move)
+            self._update_animation("idle", dt)
 
         # ── 4. Harvest tick (moving cancels it) ────────────────────────────
         if self.is_moving and self.harvest_action is not None:
@@ -333,6 +372,106 @@ class Player(Entity):
         # NOTE: we already set self.rect above from the rotated image, but
         # calling super keeps the contract intact for any future base changes.
         super().update(dt)
+
+    def _tick_attack(self, dt: float) -> None:
+        action = self.attack_action
+        if action is None:
+            return
+
+        target = action.get("target")
+        if not self._is_attack_target_valid(target):
+            self.attack_action = None
+            self._update_animation("idle", dt)
+            return
+
+        max_distance = self.attack_range + getattr(target, "attack_radius", 8)
+        if target.pos.distance_to(self.pos) > max_distance:
+            self.attack_action = None
+            self._update_animation("idle", dt)
+            return
+
+        self._set_animation_direction(target.pos - self.pos)
+        action["timer"] += dt
+
+        if action["timer"] < self.attack_windup:
+            self._update_animation("preattack", dt, loop=False)
+            return
+
+        if not action["damage_applied"] and hasattr(target, "take_damage"):
+            target.take_damage(self.attack_damage)
+            action["damage_applied"] = True
+
+        self._update_animation("attack", dt, loop=False)
+        if action["timer"] >= self.attack_windup + self.attack_recovery:
+            self.attack_action = None
+            self.attack_cooldown_remaining = self.attack_cooldown
+
+    def _is_attack_target_valid(self, target) -> bool:
+        return target is not None and getattr(target, "alive", False)
+
+    @classmethod
+    def _get_animation_frames(cls, direction: str, action: str) -> tuple[pygame.Surface, ...]:
+        cache_key = (direction, action)
+        if cache_key in cls._ANIMATION_CACHE:
+            return cls._ANIMATION_CACHE[cache_key]
+
+        direction_code = cls._ANIMATION_DIRECTION_CODES[direction]
+        action_name = cls._ANIMATION_ACTION_NAMES[action]
+        sheet = Entity.load_image(
+            "assets", "player", f"{direction_code}_{action_name}.png",
+            fallback_size=(48 * 4, 48),
+            fallback_color=(60, 180, 240),
+        )
+        frame_count = max(1, sheet.get_width() // max(1, sheet.get_height()))
+        frame_width = max(1, sheet.get_width() // frame_count)
+
+        frames = []
+        for frame_index in range(frame_count):
+            frame_rect = pygame.Rect(frame_index * frame_width, 0, frame_width, sheet.get_height())
+            frames.append(sheet.subsurface(frame_rect).copy())
+
+        cls._ANIMATION_CACHE[cache_key] = tuple(frames)
+        return cls._ANIMATION_CACHE[cache_key]
+
+    def _set_animation_direction(self, direction: Vector2) -> None:
+        if direction.length_squared() <= 0.0001:
+            return
+
+        if abs(direction.x) > abs(direction.y):
+            self.animation_direction = "side"
+            self.flip_x = direction.x < 0
+        elif direction.y < 0:
+            self.animation_direction = "up"
+            self.flip_x = False
+        else:
+            self.animation_direction = "down"
+            self.flip_x = False
+
+    def _update_animation(self, action: str, dt: float, loop: bool = True) -> None:
+        frames = self._get_animation_frames(self.animation_direction, action)
+        if action != self.animation_action:
+            self.animation_action = action
+            self.animation_frame_index = 0
+            self.animation_timer = 0.0
+
+        self.animation_timer += dt
+        frame_duration = self._ANIMATION_FRAME_DURATIONS[action]
+
+        while self.animation_timer >= frame_duration and len(frames) > 1:
+            self.animation_timer -= frame_duration
+            next_index = self.animation_frame_index + 1
+            if loop:
+                self.animation_frame_index = next_index % len(frames)
+            else:
+                self.animation_frame_index = min(next_index, len(frames) - 1)
+
+        frame = frames[self.animation_frame_index]
+        if self.animation_direction == "side" and self.flip_x:
+            frame = pygame.transform.flip(frame, True, False)
+
+        self.original_image = frame
+        self.image = frame
+        self.rect = self.image.get_rect(center=(int(self.pos.x), int(self.pos.y)))
 
     # =========================================================================
     # Draw

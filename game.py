@@ -24,7 +24,7 @@ from enemy import EnemyDirector
 from gameui import GameUI
 from settings import *
 from player import Player
-from world_objects import WorldObjectManager
+from world_objects import BUILD_DEFINITIONS, STRUCTURE_RENDER_OFFSETS, Structure, WorldObjectManager
 from world_gen import WorldGenerator
 
 
@@ -53,6 +53,7 @@ class Game:
         # ── UI panel ──────────────────────────────────────────────────────
         self.ui = GameUI(self.layout)
         self.selected_structure = None
+        self.pending_construction = None
         self.game_over = False
 
         world_width = self.layout.viewport_width * 3
@@ -109,8 +110,11 @@ class Game:
         )
 
         # ── Cameras ───────────────────────────────────────────────────────
-        minimap_view_width = int(self.layout.viewport_width * MINIMAP_VIEW_MULTIPLIER)
-        minimap_view_height = int(minimap_view_width * minimap_height / max(1, minimap_width))
+        minimap_view_width, minimap_view_height = self._get_minimap_view_size(
+            minimap_width,
+            minimap_height,
+            self.layout.viewport_width,
+        )
         self.camera = Camera(
             self.world.world_width,
             self.world.world_height,
@@ -147,8 +151,11 @@ class Game:
             view_width=layout.viewport_width,
             view_height=layout.viewport_height,
         )
-        minimap_view_width = int(layout.viewport_width * MINIMAP_VIEW_MULTIPLIER)
-        minimap_view_height = int(minimap_view_width * minimap_height / max(1, minimap_width))
+        minimap_view_width, minimap_view_height = self._get_minimap_view_size(
+            minimap_width,
+            minimap_height,
+            layout.viewport_width,
+        )
         self.minimap_camera.resize(
             minimap_width,
             minimap_height,
@@ -157,6 +164,24 @@ class Game:
         )
         self.camera.update()
         self.minimap_camera.update()
+
+    def _get_minimap_view_size(self, minimap_width: int, minimap_height: int, viewport_width: int) -> tuple[int, int]:
+        target_width = min(
+            float(self.world.world_width),
+            float(int(viewport_width * MINIMAP_VIEW_MULTIPLIER)),
+        )
+        aspect_ratio = minimap_width / max(1, minimap_height)
+        target_height = target_width / max(0.01, aspect_ratio)
+
+        if target_height > self.world.world_height:
+            target_height = float(self.world.world_height)
+            target_width = target_height * aspect_ratio
+
+        if target_width > self.world.world_width:
+            target_width = float(self.world.world_width)
+            target_height = target_width / max(0.01, aspect_ratio)
+
+        return max(1, int(target_width)), max(1, int(target_height))
 
     # ── Event handling ────────────────────────────────────────────────────────
 
@@ -197,6 +222,9 @@ class Game:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self._is_world_screen_position(event.pos):
                 if self.ui.selected_building:
+                    if self.pending_construction is not None:
+                        self.ui.announce("Finish the current build first", accent=RED, duration=1.4)
+                        return
                     self.try_place_selected_building(event.pos)
                     return
 
@@ -204,8 +232,12 @@ class Game:
                 structure = self.world_objects.find_structure_at_world(clicked_world)
                 if structure is self.selected_structure:
                     self._set_selected_structure(None)
-                else:
+                elif structure is not None:
                     self._set_selected_structure(structure)
+                elif self.try_start_player_attack(clicked_world):
+                    self._set_selected_structure(None)
+                else:
+                    self._set_selected_structure(None)
 
     # ── Update ────────────────────────────────────────────────────────────────
 
@@ -225,6 +257,7 @@ class Game:
         """
         if not self.game_over:
             self.player.update(dt)
+            self._update_pending_construction(dt)
             self.enemy_director.update(dt)
             self.world_objects.update(dt, self.enemy_director.enemies)
 
@@ -288,16 +321,89 @@ class Game:
         self.player.start_harvest(target)
         return True
 
+    def try_start_player_attack(self, world_position) -> bool:
+        if self.game_over:
+            return False
+
+        clicked = Vector2(world_position)
+        clicked_candidates = []
+        for enemy in self.enemy_director.enemies:
+            if not getattr(enemy, "alive", False):
+                continue
+
+            click_distance = enemy.pos.distance_to(clicked)
+            if click_distance > 40.0:
+                continue
+
+            player_distance = enemy.pos.distance_to(self.player.pos)
+            clicked_candidates.append((click_distance, player_distance, enemy))
+
+        if not clicked_candidates:
+            return False
+
+        _, player_distance, target = min(clicked_candidates, key=lambda item: (item[0], item[1]))
+        max_distance = self.player.attack_range + getattr(target, "attack_radius", 8)
+        if player_distance > max_distance:
+            self.ui.announce("Target out of range", accent=RED, duration=1.0)
+            return True
+
+        return self.player.start_attack(target)
+
     def try_place_selected_building(self, screen_pos) -> bool:
         building_key = self.ui.selected_building
         if building_key is None:
             return False
 
         world_pos = self._screen_to_world(screen_pos)
-        success, message = self.world_objects.place_structure(building_key, world_pos, self.player)
-        if not success:
+        definition = BUILD_DEFINITIONS.get(building_key)
+        if definition is None:
+            self.ui.announce("Unknown build option", accent=RED, duration=1.4)
+            return False
+
+        success, message, snapped = self.world_objects.validate_structure_placement(
+            building_key,
+            world_pos,
+            self.player,
+            check_resources=True,
+        )
+        if not success or snapped is None:
             self.ui.announce(message, accent=RED, duration=1.4)
-        return success
+            return False
+
+        if not self.player.consume_resources(definition.cost):
+            self.ui.announce("Not enough resources", accent=RED, duration=1.4)
+            return False
+
+        self.pending_construction = {
+            "building_key": building_key,
+            "definition": definition,
+            "position": Vector2(snapped),
+            "progress": 0.0,
+            "duration": max(0.25, float(definition.build_time)),
+        }
+        self.ui.announce(f"Constructing {definition.label}", accent=GOLD, duration=1.4)
+        return True
+
+    def _update_pending_construction(self, dt: float) -> None:
+        if self.pending_construction is None:
+            return
+
+        pending = self.pending_construction
+        position = pending["position"]
+        if self.player.pos.distance_to(position) > self.player.build_assist_radius:
+            return
+
+        pending["progress"] = min(1.0, pending["progress"] + (dt / pending["duration"]))
+        if pending["progress"] < 1.0:
+            return
+
+        structure = self.world_objects.spawn_structure(pending["building_key"], position)
+        if structure is None:
+            self.player.refund_resources(pending["definition"].cost)
+            self.ui.announce("Build failed", accent=RED, duration=1.5)
+        else:
+            self.ui.announce(f"Built {pending['definition'].label}", accent=GREEN, duration=1.5)
+        self.pending_construction = None
 
     def _screen_to_world(self, screen_pos) -> Vector2:
         screen_x, screen_y = screen_pos
@@ -372,6 +478,116 @@ class Game:
 
         obj.draw(surface, camera)
 
+    def _get_build_preview(self, screen_pos=None):
+        building_key = self.ui.selected_building
+        if building_key is None:
+            return None
+
+        definition = BUILD_DEFINITIONS.get(building_key)
+        if definition is None:
+            return None
+
+        mouse_pos = screen_pos if screen_pos is not None else pygame.mouse.get_pos()
+        if not self._is_world_screen_position(mouse_pos):
+            return None
+
+        world_pos = self._screen_to_world(mouse_pos)
+        valid, message, snapped = self.world_objects.validate_structure_placement(
+            building_key,
+            world_pos,
+            self.player,
+            check_resources=True,
+        )
+        if snapped is None:
+            return None
+
+        return {
+            "definition": definition,
+            "position": Vector2(snapped),
+            "valid": valid,
+            "message": message,
+        }
+
+    def _draw_build_radius(self, surface, camera) -> None:
+        if getattr(camera, "name", "") == "minimap":
+            return
+        if self.ui.selected_building is None and self.pending_construction is None:
+            return
+
+        screen_pos = camera.world_to_screen(self.player.pos)
+        radius = max(8, int(self.player.build_radius * min(camera.scale_x, camera.scale_y)))
+        overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        pygame.draw.circle(overlay, (255, 248, 220, 20), (int(screen_pos.x), int(screen_pos.y)), radius)
+        pygame.draw.circle(overlay, (255, 248, 220, 42), (int(screen_pos.x), int(screen_pos.y)), radius, 1)
+        surface.blit(overlay, (0, 0))
+
+    def _draw_structure_ghost(self, surface, camera, definition, position, *, valid: bool, alpha: int, progress: float | None = None) -> None:
+        sprite = Structure._load_building_sprite(definition) or Structure._build_surface(definition)
+        sprite = sprite.copy()
+        if not valid:
+            sprite.fill((255, 120, 120, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        sprite.set_alpha(alpha)
+
+        world_rect = sprite.get_rect()
+        world_rect.midbottom = (
+            int(position.x),
+            int(position.y + STRUCTURE_RENDER_OFFSETS.get(definition.key, 0)),
+        )
+        draw_rect = camera.world_rect_to_screen(world_rect)
+        if draw_rect.width <= 0 or draw_rect.height <= 0:
+            return
+
+        if draw_rect.size != sprite.get_size():
+            sprite = pygame.transform.smoothscale(sprite, draw_rect.size)
+        surface.blit(sprite, draw_rect)
+
+        collision_rect = camera.world_rect_to_screen(Structure.get_preview_collision_rect(definition, position))
+        outline_color = GREEN if valid else RED
+        pygame.draw.ellipse(surface, outline_color, collision_rect.inflate(10, 8), 2)
+
+        if progress is not None:
+            bar_width = max(18, int(44 * camera.scale_x))
+            bar_height = max(4, int(6 * camera.scale_y))
+            bar_rect = pygame.Rect(0, 0, bar_width, bar_height)
+            bar_rect.midbottom = (collision_rect.centerx, draw_rect.top - 6)
+            fill_rect = pygame.Rect(bar_rect.x, bar_rect.y, int(bar_width * max(0.0, min(1.0, progress))), bar_height)
+            pygame.draw.rect(surface, (40, 26, 18), bar_rect)
+            pygame.draw.rect(surface, GOLD if valid else ORANGE, fill_rect)
+            pygame.draw.rect(surface, WHITE, bar_rect, 1)
+
+    def _draw_build_overlays(self, surface, camera) -> None:
+        if getattr(camera, "name", "") == "minimap":
+            return
+
+        self._draw_build_radius(surface, camera)
+
+        if self.pending_construction is not None:
+            pending = self.pending_construction
+            is_active = self.player.pos.distance_to(pending["position"]) <= self.player.build_assist_radius
+            self._draw_structure_ghost(
+                surface,
+                camera,
+                pending["definition"],
+                pending["position"],
+                valid=is_active,
+                alpha=140,
+                progress=pending["progress"],
+            )
+            return
+
+        preview = self._get_build_preview()
+        if preview is None:
+            return
+
+        self._draw_structure_ghost(
+            surface,
+            camera,
+            preview["definition"],
+            preview["position"],
+            valid=preview["valid"],
+            alpha=120,
+        )
+
     def _render_world(self, surface, camera, show_labels=False):
         """Render the world into *surface* from the perspective of *camera*."""
         self.world.draw(surface, camera)
@@ -388,6 +604,7 @@ class Game:
         for scene_object in scene_objects:
             self._draw_scene_object(surface, camera, scene_object)
 
+        self._draw_build_overlays(surface, camera)
         self.world_objects.draw_projectiles(surface, camera)
 
         if self.main.debug_mode and show_labels:
