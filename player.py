@@ -255,10 +255,22 @@ class Player(Entity):
             "duration": float(getattr(target, "action_duration", 1.0)),
             "label":    getattr(target, "action_label", "Harvesting"),
         }
+        self._play_harvest_sound(target)
 
     def stop_harvest(self) -> None:
         """Cancel any active harvest without yielding resources."""
         self.harvest_action = None
+
+    def _play_harvest_sound(self, target) -> None:
+        audio = getattr(self.main, "audio", None)
+        if audio is None or not hasattr(audio, "play"):
+            return
+
+        resource_key = getattr(getattr(target, "definition", None), "key", None)
+        if resource_key == "tree":
+            audio.play("tree_chop")
+        elif resource_key in {"rock", "gold"}:
+            audio.play("pickaxe_mining")
 
     def start_attack(self, target) -> bool:
         if self.attack_cooldown_remaining > 0.0:

@@ -52,6 +52,7 @@ class Game:
 
         # ── UI panel ──────────────────────────────────────────────────────
         self.ui = GameUI(self.layout)
+        self.ui.set_audio_controller(getattr(self.main, "audio", None))
         self.selected_structure = None
         self.pending_construction = None
         self.game_over = False
@@ -266,6 +267,19 @@ class Game:
 
         if self.selected_structure is not None and not getattr(self.selected_structure, "alive", False):
             self._set_selected_structure(None)
+
+        audio = getattr(self.main, "audio", None)
+        if audio is not None and hasattr(audio, "set_enemy_walking_active"):
+            enemy_walking = (
+                not self.game_over
+                and any(
+                    getattr(enemy, "alive", False)
+                    and not getattr(enemy, "death_animation_active", False)
+                    and getattr(enemy, "animation_action", "walk") == "walk"
+                    for enemy in self.enemy_director.enemies
+                )
+            )
+            audio.set_enemy_walking_active(enemy_walking)
 
         self.ui.gold = self.player.get_resource_amount("gold")
         self.ui.food = self.player.get_resource_amount("food")

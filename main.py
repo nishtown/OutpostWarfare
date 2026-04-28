@@ -21,6 +21,7 @@ or as an asyncio target (Pyodide / web export)::
 
 import pygame
 
+from audio_manager import AudioManager
 from settings import *
 from game import Game
 
@@ -49,6 +50,11 @@ class Main:
     def __init__(self):
         pygame.init()
         pygame.mixer.init()   # Initialise audio subsystem for sound effects / music
+        self.audio = AudioManager()
+        self.audio.prepare_music_track(
+            "background",
+            asset_path("assets", "sounds", "background1.mp3"),
+        )
 
         window_width, window_height = choose_startup_window_size()
         self.layout = build_display_layout(window_width, window_height)

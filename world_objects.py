@@ -678,6 +678,16 @@ class Structure(Entity):
             (self.get_worker_exit_position(), self.get_worker_door_position(), self.pos),
         )
 
+    def _play_resource_action_sound(self, resource_key: str | None) -> None:
+        audio = getattr(self.main, "audio", None)
+        if audio is None or not hasattr(audio, "play"):
+            return
+
+        if resource_key == "tree":
+            audio.play("tree_chop")
+        elif resource_key in {"rock", "gold"}:
+            audio.play("pickaxe_mining")
+
     def _finish_worker_return(self, worker: dict) -> None:
         if worker.get("carrying_amount", 0) > 0:
             worker["state"] = "dropping_off"
@@ -738,6 +748,7 @@ class Structure(Entity):
                 if self._follow_worker_route(worker, dt):
                     worker["state"] = "harvesting"
                     worker["timer"] = max(self._LUMBERYARD_CHOP_TIME, getattr(target, "action_duration", self._LUMBERYARD_CHOP_TIME))
+                    self._play_resource_action_sound(getattr(getattr(target, "definition", None), "key", None))
                 continue
 
             if state == "harvesting":
@@ -779,6 +790,7 @@ class Structure(Entity):
                 if self._follow_worker_route(worker, dt):
                     worker["state"] = "digging"
                     worker["timer"] = self._get_quarry_dig_duration()
+                    self._play_resource_action_sound(self.worker_resource_key)
                 continue
 
             if state == "planting":
@@ -1679,13 +1691,14 @@ class ArrowProjectile:
 class BombProjectile:
     """Heavy projectile that damages enemies in a radius on impact."""
 
-    def __init__(self, position: Vector2, target, damage: float, speed: float, splash_radius: float, targets) -> None:
+    def __init__(self, position: Vector2, target, damage: float, speed: float, splash_radius: float, targets, main=None) -> None:
         self.pos = Vector2(position)
         self.target = target
         self.damage = float(damage)
         self.speed = float(speed)
         self.splash_radius = float(splash_radius)
         self.targets = targets
+        self.main = main
         self.alive = True
         self.heading = Vector2(1, 0)
 
@@ -1721,6 +1734,10 @@ class BombProjectile:
         pygame.draw.circle(surface, WHITE, (int(screen_pos.x), int(screen_pos.y)), radius, 1)
 
     def _explode(self) -> None:
+        audio = getattr(self.main, "audio", None)
+        if audio is not None and hasattr(audio, "play"):
+            audio.play("bomb_impact")
+
         for enemy in self.targets:
             if not getattr(enemy, "alive", False):
                 continue
@@ -1757,6 +1774,11 @@ class WorldObjectManager:
         self.base_structure = self._create_main_base()
         self._spawn_resource_nodes()
 
+    def _play_sound(self, sound_name: str) -> None:
+        audio = getattr(self.main, "audio", None)
+        if audio is not None and hasattr(audio, "play"):
+            audio.play(sound_name)
+
     def update(self, dt: float, enemies) -> None:
         for node in self.resource_nodes:
             node.update(dt)
@@ -1775,6 +1797,7 @@ class WorldObjectManager:
             if structure.alive:
                 surviving_structures.append(structure)
             elif not structure.is_trap:
+                self._play_sound("building_destroyed")
                 self._announce(f"{structure.definition.label} destroyed", accent=RED, duration=1.8)
         self.structures = surviving_structures
 
@@ -2124,12 +2147,14 @@ class WorldObjectManager:
                         structure.projectile_speed,
                         getattr(structure, "splash_radius", 0.0),
                         living_enemies,
+                        main=self.main,
                     )
                 )
             else:
                 self.projectiles.append(
                     ArrowProjectile(structure.pos, target, structure.projectile_damage, structure.projectile_speed)
                 )
+                self._play_sound("arrow_fire")
             structure.cooldown_remaining = structure.attack_cooldown
 
     def _spawn_resource_nodes(self) -> None:

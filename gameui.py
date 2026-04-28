@@ -62,6 +62,9 @@ _BTN_GAP     = 5     # pixel gap between adjacent buttons
 _BTN_H       = 72    # height of each BuildingButton
 _RES_PANEL_H = 132   # total height of the resources panel
 _TOP_BAR_PAD = 10
+_STATUS_PANEL_H = 112
+_VOLUME_SECTION_H = 58
+_TITLE_PLATE_H = 34
 
 
 @dataclass(frozen=True)
@@ -390,6 +393,64 @@ class Button(UIElement):
         return self.hovered
 
 
+class VolumeSlider(UIElement):
+    """Simple horizontal slider used for master volume control."""
+
+    def __init__(self, x, y, width, height, value=0.6):
+        super().__init__(x, y, width, height, color=STONE_DARK)
+        self.value = 0.0
+        self.dragging = False
+        self.set_value(value)
+
+    def set_rect(self, x, y, width, height) -> None:
+        self.rect.update(x, y, width, height)
+
+    def set_value(self, value: float) -> None:
+        self.value = max(0.0, min(1.0, float(value)))
+
+    def value_from_position(self, pos_x: int) -> float:
+        left = self.rect.x + 8
+        width = max(1, self.rect.width - 16)
+        ratio = (pos_x - left) / width
+        return max(0.0, min(1.0, ratio))
+
+    def begin_drag(self, pos) -> bool:
+        if not self.is_hovered(pos):
+            return False
+
+        self.dragging = True
+        self.set_value(self.value_from_position(pos[0]))
+        return True
+
+    def drag_to(self, pos) -> bool:
+        if not self.dragging:
+            return False
+
+        self.set_value(self.value_from_position(pos[0]))
+        return True
+
+    def end_drag(self) -> None:
+        self.dragging = False
+
+    def draw(self, surface):
+        track_rect = pygame.Rect(self.rect.x, self.rect.centery - 4, self.rect.width, 8)
+        _stone_fill(surface, track_rect, STONE_DARK)
+        _bevel(surface, track_rect, raised=False, width=1)
+
+        fill_width = max(10, int(track_rect.width * self.value)) if self.value > 0.0 else 0
+        if fill_width > 0:
+            fill_rect = pygame.Rect(track_rect.x, track_rect.y, fill_width, track_rect.height)
+            _stone_fill(surface, fill_rect, STONE_HILIT)
+
+        thumb_center_x = track_rect.x + int(track_rect.width * self.value)
+        thumb_center_x = max(track_rect.left + 7, min(track_rect.right - 7, thumb_center_x))
+        thumb_rect = pygame.Rect(0, 0, 14, self.rect.height)
+        thumb_rect.center = (thumb_center_x, self.rect.centery)
+        thumb_color = STONE_LIGHT if (self.hovered or self.dragging) else STONE_MID
+        _stone_fill(surface, thumb_rect, thumb_color)
+        _bevel(surface, thumb_rect, raised=not self.dragging, width=2)
+
+
 # ── BuildingButton (C&C-style square icon buttons) ────────────────────────────
 
 class BuildingButton(Button):
@@ -712,8 +773,10 @@ class GameUI:
         self.game_over = False
         self.announcements = AnnouncementFeed(pygame.Rect(0, 0, 1, 1))
         self.build_buttons = []
+        self.audio_controller = None
         self.upgrade_button = Button(0, 0, 1, 1, "Upgrade")
         self.repair_button = Button(0, 0, 1, 1, "Repair")
+        self.volume_slider = VolumeSlider(0, 0, 1, 18, 0.6)
         self.reset_button = Button(0, 0, 168, 42, "Reset Outpost")
         self.set_layout(layout)
 
@@ -725,9 +788,10 @@ class GameUI:
             + (self.build_rows * (_BTN_H + _BTN_GAP))
             - _BTN_GAP
             + 18
-            + 92
+            + _STATUS_PANEL_H
             + 42
-            + 40
+            + _VOLUME_SECTION_H
+            + _TITLE_PLATE_H
         )
         available_height = panel_height - reserved_height
         return max(
@@ -770,7 +834,10 @@ class GameUI:
 
         last_btn_bottom = self._build_top + self.build_rows * (_BTN_H + _BTN_GAP) - _BTN_GAP
         self._status_y = last_btn_bottom + 18
-        self._wave_button_y = self._status_y + 92
+        self._wave_button_y = self._status_y + _STATUS_PANEL_H
+        self._title_y = py + self.panel_height - _TITLE_PLATE_H
+        self._volume_y = self._title_y - _VOLUME_SECTION_H
+        self.volume_slider.set_rect(px + _PAD + 14, self._volume_y + 24, inner_w - 28, 18)
         self.announcements.viewport_rect = pygame.Rect(
             layout.viewport_x,
             layout.viewport_y,
@@ -786,6 +853,16 @@ class GameUI:
             42,
             "Reset Outpost",
         )
+
+    def set_audio_controller(self, controller) -> None:
+        self.audio_controller = controller
+        if controller is not None and hasattr(controller, "get_master_volume"):
+            self.volume_slider.set_value(controller.get_master_volume())
+
+    def _set_master_volume(self, value: float) -> None:
+        self.volume_slider.set_value(value)
+        if self.audio_controller is not None and hasattr(self.audio_controller, "set_master_volume"):
+            self.audio_controller.set_master_volume(self.volume_slider.value)
 
     def _resource_rows(self):
         return [
@@ -870,6 +947,10 @@ class GameUI:
         once per event inside the main event loop (forwarded from Game).
         """
         if event.type == pygame.MOUSEMOTION:
+            self.volume_slider.hovered = self.volume_slider.is_hovered(event.pos)
+            if self.volume_slider.dragging:
+                self._set_master_volume(self.volume_slider.value_from_position(event.pos[0]))
+
             if self.game_over:
                 self.reset_button.hovered = self.reset_button.is_hovered(event.pos)
                 self.upgrade_button.hovered = False
@@ -892,6 +973,10 @@ class GameUI:
             )
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1 and self.volume_slider.begin_drag(event.pos):
+                self._set_master_volume(self.volume_slider.value)
+                return None
+
             if self.game_over and self.reset_button.hovered:
                 return "reset_game"
 
@@ -914,6 +999,10 @@ class GameUI:
                         self.selected_building = btn.building_type
                         self.selected_structure = None
                     return "build_selection_changed"
+
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 1:
+                self.volume_slider.end_drag()
 
         return None
 
@@ -1006,7 +1095,9 @@ class GameUI:
         # ── Selected building status strip ────────────────────────────────
         # Only rendered if there is vertical space between here and the footer.
         sy = self._status_y
-        if sy + 92 < py + ph - 40:
+        status_footer_y = self._wave_button_y - 10
+        status_section_visible = self._wave_button_y + 36 < self._volume_y - 10
+        if status_section_visible:
             _divider(surface, px + _PAD, sy, inner_w)
             if self.selected_structure is not None:
                 structure = self.selected_structure
@@ -1079,11 +1170,14 @@ class GameUI:
                     panel_cost = structure.get_upgrade_cost() or {}
 
                 surface.blit(lbl, (px + _PAD + 4, sy + 6))
-                for index, line in enumerate(hint_lines[:3]):
+                displayed_hints = hint_lines[:3]
+                for index, line in enumerate(displayed_hints):
                     hint = FONT_SMALL.render(line, True, PARCHMENT_DK)
                     surface.blit(hint, (px + _PAD + 4, sy + 8 + lbl.get_height() + index * 16))
                 if panel_label is not None:
-                    self._draw_cost_panel(surface, px + _PAD + 4, sy + 60, panel_label, panel_cost)
+                    cost_y = sy + 12 + lbl.get_height() + len(displayed_hints) * 16 + 4
+                    cost_y = min(cost_y, status_footer_y - 20)
+                    self._draw_cost_panel(surface, px + _PAD + 4, cost_y, panel_label, panel_cost)
             elif self.selected_building:
                 definition = BUILD_DEFINITIONS[self.selected_building]
                 name_txt = definition.label
@@ -1094,7 +1188,7 @@ class GameUI:
                 hint = FONT_SMALL.render(f"Build {definition.build_time:0.1f}s  Stay nearby  |  Click again to cancel", True, PARCHMENT_DK)
                 surface.blit(hint, (px + _PAD + 4, sy + 68))
 
-        if self._wave_button_y + 36 < py + ph - 42:
+        if status_section_visible:
             _divider(surface, px + _PAD, self._wave_button_y - 10, inner_w)
             if self.selected_structure is not None and getattr(self.selected_structure, "is_repairable", False):
                 self.repair_button.set_text("Repair")
@@ -1111,8 +1205,15 @@ class GameUI:
                 timer_rect = timer_text.get_rect(center=(px + pw // 2, self._wave_button_y + 16))
                 surface.blit(timer_text, timer_rect)
 
+            _divider(surface, px + _PAD, self._volume_y - 8, inner_w)
+            volume_label = FONT_SMALL.render("Volume", True, PARCHMENT_DK)
+            volume_value = FONT_SMALL.render(f"{int(round(self.volume_slider.value * 100))}%", True, GOLD)
+            surface.blit(volume_label, (px + _PAD + 4, self._volume_y))
+            surface.blit(volume_value, (px + pw - _PAD - volume_value.get_width() - 4, self._volume_y))
+            self.volume_slider.draw(surface)
+
         # ── Bottom title plate ────────────────────────────────────────────
-        title_y = py + ph - 34
+            title_y = self._title_y
         _divider(surface, px + _PAD, title_y - 4, inner_w)
         title = FONT_MEDIUM.render("=  OUTPOST WARFARE  =", True, GOLD)
         surface.blit(title, (px + pw//2 - title.get_width()//2, title_y + 2))
